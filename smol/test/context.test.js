@@ -1,0 +1,226 @@
+// Context management: stale-read eviction, thinking accounting, tiered
+// compaction with a fake provider, and the digest renderer.
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { ContextManager, renderForDigest } = require("../dist/context");
+const { describeStats } = require("../dist/agent");
+const { lastUserIndex } = require("../dist/providers/types");
+
+test("compaction keeps a fresh tool result that fits the hard budget above the soft target", async () => {
+  const cm = new ContextManager(4096, 1024);
+  const latest = 'critical '.repeat(800);
+  const input = [{ role: 'system', content: 'sys '.repeat(600) },
+    { role: 'user', content: 'build' },
+    { role: 'assistant', content: 'old '.repeat(2000) },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'fresh', name: 'read_file', args: { path: 'module.js' } }] },
+    { role: 'tool', content: latest, toolCallId: 'fresh', toolName: 'read_file' }];
+  const result = await cm.manage(input, [], { chat: async () => { throw Error('no inference'); } },
+    { originalRequest: 'build', filesTouched: new Set(), commandsRun: [] }, { force: true, deterministic: true });
+  assert.ok(result.report.after > cm.usableWindow() * 0.8);
+  cm.assertFits(result.messages, []);
+  assert.equal(result.messages.at(-1).content, latest);
+  assert.equal(result.messages.at(-2).toolCalls[0].id, 'fresh');
+  assert.equal(cm.needsAttention(result.messages, []), false, 'do not summarize away the same result again');
+});
+
+const tools = [{ name: "t", description: "d", parameters: { type: "object", properties: {} } }];
+
+test('context pressure drops older reasoning before evicting recent source', async () => {
+  const cm = new ContextManager(8192, 2048);
+  const input = [{role:'system',content:'sys'}, {role:'user',content:'repair'},
+    {...readCall('a','a.js'),thinking:'old analysis '.repeat(1700)}, toolResult('a','read_file','export function actualAPI() {}'),
+    {...readCall('b','b.js'),thinking:'next edit'}, toolResult('b','read_file','import { wrongAPI } from "./a.js"')];
+  const result = await cm.manage(input,[],{chat:async()=>{throw Error('unnecessary summary');}},
+    {originalRequest:'repair',filesTouched:new Set(),commandsRun:[]});
+  assert.equal(result.report.action,'evicted');
+  assert.equal(result.messages[2].thinking,undefined);
+  assert.equal(result.messages[4].thinking,'next edit');
+  assert.match(result.messages[3].content,/actualAPI/);
+  assert.match(result.messages[5].content,/wrongAPI/);
+});
+
+test("old successful write payloads are evicted without summarizing or changing the newest tool group", async () => {
+  const cm = new ContextManager(4096,1024);
+  const body = 'saved code '.repeat(650);
+  const originalCall = {id:'w',name:'write_file',args:{path:'a.js',content:body}};
+  const input = [{role:'system',content:'sys'},{role:'user',content:'build'},
+    {role:'assistant',content:'',toolCalls:[originalCall]},
+    {role:'tool',toolCallId:'w',content:'Created a.js (100 lines).'},
+    {role:'assistant',content:'',toolCalls:[{id:'r',name:'read_file',args:{path:'b.js'}}]},
+    {role:'tool',toolCallId:'r',content:'fresh reference '.repeat(200)}];
+  const result = await cm.manage(input,[],{chat:async()=>{throw Error('must not summarize');}},
+    {originalRequest:'build',filesTouched:new Set(['a.js']),commandsRun:[]});
+  assert.equal(result.report.action,'evicted');
+  assert.equal(result.messages[2].toolCalls,undefined);
+  assert.equal(result.messages[2].role,'user','synthetic receipts must never teach an assistant answer pattern');
+  assert.equal(result.messages[2].historyNote,true);
+  assert.equal(lastUserIndex(result.messages),1,'history records are not new user turns');
+  assert.match(result.messages[2].content,/write_file: Created a.js/);
+  assert.equal(result.messages.some(m=>m.toolCallId==='w'),false,'remove the paired result');
+  assert.equal(originalCall.args.content,body,'UI/audit references keep their original call');
+  assert.equal(result.messages.at(-1).content,'fresh reference '.repeat(200));
+});
+
+test("handover command records retain recent outcomes without copying whole inline programs", async () => {
+  const cm = new ContextManager(8192,2048);
+  const commands = Array.from({length:9},(_,i)=>`node -e "${'inline code '.repeat(600)}" check-${i} -> [exit code ${i%2}]`);
+  const result = await cm.manage([{role:'system',content:'sys'},{role:'user',content:'build'}],[],{},
+    {originalRequest:'build',filesTouched:new Set(),commandsRun:commands}, {force:true,deterministic:true});
+  const note = result.messages[1].content;
+  assert.match(note,/check-8 -> \[exit code 0\]/);
+  assert.match(note,/check-7 -> \[exit code 1\]/);
+  assert.doesNotMatch(note,/check-0/);
+  assert.ok(note.length < 1600);
+});
+
+test('write compaction preserves mixed batch pairs, failed and pending writes, and migrates legacy markers', async () => {
+  const body='actual code '.repeat(700);
+  const calls=[
+    {id:'ok',name:'write_file',args:{path:'ok.js',content:body}},
+    {id:'read',name:'read_file',args:{path:'reference.js'}},
+    {id:'fail',name:'edit_file',args:{path:'fail.js',old_text:body,new_text:'fixed'}},
+    {id:'pending',name:'write_file',args:{path:'pending.js',content:body}},
+    {id:'legacy',name:'write_file',args:{path:'legacy.js',content:'[7000 characters already applied to legacy.js. Read the file for current code.]'}},
+  ];
+  // Reasoning supplies pressure without forcing loss of the remaining calls.
+  const input=[{role:'system',content:'sys'},{role:'user',content:'build'},
+    {role:'assistant',content:'writing',thinking:'old '.repeat(50000),toolCalls:calls},
+    toolResult('ok','write_file','Created ok.js (100 lines).\nWarning: syntax error at line 2'),
+    toolResult('read','read_file','real reference'),
+    toolResult('fail','edit_file','Error: old_text was not found'),
+    toolResult('legacy','write_file','Overwrote legacy.js (100 lines).'),
+    readCall('latest','latest.js'),toolResult('latest','read_file','latest source')];
+  const result=await new ContextManager(32768,8192).manage(input,[],
+    {chat:async()=>{throw Error('no summary needed');}},
+    {originalRequest:'build',filesTouched:new Set(),commandsRun:[]});
+  assert.equal(result.report.action,'evicted');
+  assert.deepEqual(result.messages[2].toolCalls.map(c=>c.id),['read','fail','pending']);
+  const history=result.messages.find(m=>m.historyNote);
+  assert.equal(history.role,'user');
+  assert.match(history.content,/syntax error at line 2/);
+  assert.match(history.content,/Overwrote legacy.js/);
+  assert.equal(result.messages[2].content,'writing');
+  assert.deepEqual(result.messages.filter(m=>m.role==='tool').map(m=>m.toolCallId),['read','fail','latest']);
+  assert.equal(result.messages[2].toolCalls[2].args.content,body);
+  assert.equal(calls.length,5,'audit references are unchanged');
+  assert.doesNotMatch(JSON.stringify(result.messages),/characters already applied/);
+});
+
+function readCall(id, path) {
+  return { role: "assistant", content: "", toolCalls: [{ id, name: "read_file", args: { path } }] };
+}
+function toolResult(id, name, content) {
+  return { role: "tool", content, toolCallId: id, toolName: name };
+}
+
+test("evictStaleReads stubs big earlier reads of an overwritten file only", () => {
+  const cm = new ContextManager(32000, 2048);
+  const big = "x".repeat(3000);
+  const msgs = [
+    { role: "system", content: "s" },
+    { role: "user", content: "go" },
+    readCall("r1", "game.js"),
+    toolResult("r1", "read_file", big),
+    readCall("r2", "index.html"),
+    toolResult("r2", "read_file", big),
+    readCall("r3", "./game.js"),
+    toolResult("r3", "read_file", "short"),
+    { role: "assistant", content: "", toolCalls: [{ id: "w1", name: "write_file", args: { path: "game.js", content: "new" } }] },
+    toolResult("w1", "write_file", "Overwrote game.js"),
+  ];
+  const n = cm.evictStaleReads(msgs, "game.js");
+  assert.equal(n, 1);
+  assert.equal(msgs[3].evicted, true);
+  assert.match(msgs[3].content, /out of date/);
+  assert.equal(msgs[5].evicted, undefined, "other files untouched");
+  assert.equal(msgs[7].content, "short", "small reads are kept");
+  assert.equal(msgs[9].content, "Overwrote game.js", "the write's own result untouched");
+});
+
+test("estimateMessages ignores thinking from finished turns", () => {
+  const cm = new ContextManager(32000, 2048);
+  const think = "t".repeat(4000);
+  const base = [
+    { role: "system", content: "s" },
+    { role: "user", content: "a" },
+    { role: "assistant", content: "ok", thinking: think },
+    { role: "user", content: "b" },
+    { role: "assistant", content: "ok", thinking: think },
+  ];
+  const withOld = cm.estimateMessages(base);
+  const noThinking = cm.estimateMessages(base.map((m) => ({ ...m, thinking: undefined })));
+  // exactly one 1000-token trace should count (the current turn's)
+  assert.ok(withOld - noThinking >= 900 && withOld - noThinking <= 1100, `delta ${withOld - noThinking}`);
+});
+
+test("manage: tier 1 evicts old tool output, summarizer runs with thinking off", async () => {
+  const cm = new ContextManager(4000, 500); // usable 3500, threshold 2800 tokens
+  const calls = [];
+  const provider = {
+    label: "fake", modelId: "fake", contextWindow: 4000, maxOutputTokens: 500,
+    setEffort() {}, effortLabel() { return null; },
+    async chat(messages, t, opts) {
+      calls.push({ messages, opts });
+      return { content: "Task: build it.\nDone: a.js\nIn progress: b.js\nNext: c.js\nNotes: none", toolCalls: [] };
+    },
+  };
+  const msgs = [{ role: "system", content: "sys" }, { role: "user", content: "build the thing" }];
+  for (let i = 0; i < 8; i++) {
+    msgs.push(readCall(`r${i}`, `f${i}.js`));
+    msgs.push(toolResult(`r${i}`, "read_file", "y".repeat(2400))); // ~600 tokens each
+  }
+  const before = cm.estimatePrompt(msgs, tools);
+  assert.ok(before > 2800, `setup should exceed the threshold, got ${before}`);
+  const { messages, report } = await cm.manage(msgs, tools, provider, {
+    originalRequest: "build the thing", filesTouched: new Set(["a.js"]), commandsRun: [], planLine: "Plan (1/3 done):\n1.[x] a\n2.[>] b\n3.[ ] c",
+  });
+  assert.equal(report.action, "evicted", "eviction alone should be enough here");
+  assert.equal(calls.length, 0, "no summarizer call when eviction suffices");
+  assert.ok(messages.filter((m) => m.evicted).length >= 1);
+  assert.ok(report.after < report.before);
+
+  // Now force tier 2: make the tail itself too big to evict.
+  const cm2 = new ContextManager(4000, 500);
+  const msgs2 = [{ role: "system", content: "sys" }, { role: "user", content: "build the thing" }];
+  for (let i = 0; i < 6; i++) {
+    msgs2.push({ role: "assistant", content: "z".repeat(3000) }); // non-tool content is not evictable
+    msgs2.push({ role: "user", content: "more" });
+  }
+  const r2 = await cm2.manage(msgs2, tools, provider, {
+    originalRequest: "build the thing", currentRequest: "more", filesTouched: new Set(), commandsRun: ["npm test"], planLine: null,
+  });
+  assert.ok(["compacted", "floor"].includes(r2.report.action));
+  assert.equal(calls.length, 1, "summarizer called once");
+  assert.equal(calls[0].opts.effortOverride, "off", "summary must not think");
+  assert.ok(calls[0].opts.maxTokens <= 700);
+  assert.equal(r2.messages[0].content, "sys");
+  assert.equal(r2.messages[1].compactNote, true);
+  assert.match(r2.messages[1].content, /Hand-over notes/);
+  assert.match(r2.messages[1].content, /Recent commands: npm test/);
+  assert.match(r2.messages[1].content, /Current request \(what you are working on NOW\): more/);
+  // A second compaction must not stack notes.
+  const r3 = await cm2.manage([r2.messages[0], r2.messages[1], ...msgs2.slice(1)], tools, provider, {
+    originalRequest: "build the thing", filesTouched: new Set(), commandsRun: [], planLine: null,
+  });
+  assert.equal(r3.messages.filter((m) => m.compactNote).length, 1);
+});
+
+test("renderForDigest keeps the end of the log and hides file bodies", () => {
+  const msgs = [];
+  for (let i = 0; i < 40; i++) {
+    msgs.push({ role: "assistant", content: `step ${i}`, toolCalls: [{ id: `c${i}`, name: "write_file", args: { path: `f${i}.js`, content: "q".repeat(5000) } }] });
+    msgs.push({ role: "tool", content: `Created f${i}.js`, toolCallId: `c${i}`, toolName: "write_file" });
+  }
+  const out = renderForDigest(msgs, 3000);
+  assert.ok(out.length <= 3100);
+  assert.match(out, /^\[earlier log omitted\]/);
+  assert.match(out, /step 39/);
+  assert.doesNotMatch(out, /qqqqq/, "file content never reaches the summarizer");
+  assert.match(out, /<5000 chars>/);
+});
+
+test("describeStats formats a compact speed readout", () => {
+  assert.equal(describeStats({ modelCalls: 3, toolCalls: 2, generatedTokens: 4100, genSeconds: 34.7, thinkingChars: 0, promptTokensLast: 0, durationMs: 0 }), " · 2 tools · 4.1k tok @ 118 tok/s");
+  assert.equal(describeStats({ modelCalls: 1, toolCalls: 0, generatedTokens: 0, genSeconds: 0, thinkingChars: 0, promptTokensLast: 0, durationMs: 0 }), "");
+  assert.equal(describeStats({ modelCalls: 1, toolCalls: 1, generatedTokens: 50, genSeconds: 0, thinkingChars: 0, promptTokensLast: 0, durationMs: 0 }), " · 1 tool · 50 tok");
+});
