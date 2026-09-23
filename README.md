@@ -25,12 +25,21 @@ Reliability is at the core of SMOL Coder Plus.
 ## 🚀 Getting Started
 
 ### Installation
-To install the global `smolcoder-plus` command:
+Install the `smolcoder-plus` command globally from npm:
 
 ```bash
-# From the project root
-npm install -g .
+npm install -g smolcoder-plus
 ```
+
+Then run it in any project directory:
+
+```bash
+cd my-project
+smolcoder-plus
+```
+
+(Alternative: install from a local checkout with `npm install -g .` from
+the project root.)
 
 For development (keeps the command linked to your working tree, so edits
 take effect after a rebuild):
