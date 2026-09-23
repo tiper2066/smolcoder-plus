@@ -105,7 +105,7 @@ function parseArgs(argv: string[]): CliArgs {
       args.workspace = path.resolve(a);
       args.workspaceGiven = true;
     } else {
-      console.error(`Unknown option "${a}". Try smol --help.`);
+      console.error(`Unknown option "${a}". Try smolcoder-plus --help.`);
       process.exit(1);
     }
   }
@@ -113,14 +113,14 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 const HELP = `
-${c.bold("smolcoder")} v${VERSION} — a smol, zero-config coding agent for local models.
+${c.bold("smolcoder-plus")} v${VERSION} — a smol, zero-config coding agent for local models.
 
 Detects Ollama and LM Studio on this computer automatically — any port, Docker
 containers included. Models on other machines: /models → "Find models on
 another machine" searches your network or takes an address, and remembers it.
 
 ${c.bold("Usage:")}
-  smol [workspace] [options]
+  smolcoder-plus [workspace] [options]
 
 ${c.bold("Options:")}
   -m, --mode <ro|edit|bypass>  ro: read files only. edit: read/write files and run
@@ -134,7 +134,7 @@ ${c.bold("Options:")}
   --web [port]                 browser UI (default port ${DEFAULT_WEB_PORT}): a sidebar of your
                                workspaces and sessions, an embedded browser and
                                terminal panel. Run it from anywhere; a second
-                               smol --web adds its folder to the running UI.
+                               smolcoder-plus --web adds its folder to the running UI.
   -p, --print "<prompt>"       headless: run a single prompt and exit
   -h, --help                   this help
   -v, --version                version
@@ -285,7 +285,7 @@ async function runHeadless(args: CliArgs): Promise<void> {
 async function runInteractive(args: CliArgs): Promise<void> {
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
     console.error(
-      'Interactive mode needs a terminal. For headless use, run: smol -p "your prompt" — or serve a browser UI with --web'
+      'Interactive mode needs a terminal. For headless use, run: smolcoder-plus -p "your prompt" — or serve a browser UI with --web'
     );
     process.exit(1);
   }
@@ -344,7 +344,7 @@ function isHomeOrRoot(p: string): boolean {
 }
 
 async function runWeb(args: CliArgs): Promise<void> {
-  console.log(`${c.bold("smol")}${c.dim(c.bold("coder"))} ${c.dim("v" + VERSION + " · web")}`);
+  console.log(`${c.bold("smolcoder-plus")} ${c.dim("v" + VERSION + " · web")}`);
   const port = args.webPort ?? DEFAULT_WEB_PORT;
   const workspace = args.workspace;
   const autoStart = !!args.workspaceGiven || !isHomeOrRoot(workspace);
@@ -367,7 +367,7 @@ async function runWeb(args: CliArgs): Promise<void> {
     await hub.start();
   } catch (err: any) {
     if (err?.code === "EADDRINUSE") {
-      console.error(`\nPort ${port} is already in use. Pick another with: smol --web ${port + 1}`);
+      console.error(`\nPort ${port} is already in use. Pick another with: smolcoder-plus --web ${port + 1}`);
       process.exit(1);
     }
     throw err;

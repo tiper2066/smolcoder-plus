@@ -1,6 +1,8 @@
 # SMOL Coder Plus 🚀
 
-**SMOL Coder Plus** is an enhanced version of the original SMOL Coder, designed for more robust and capable AI agentic workflows. It takes the core principles of SMOL Coder and injects production-ready features to handle real-world complexity.
+**SMOL Coder Plus** is an enhanced fork of the original [SMOL Coder](https://github.com/leonvanzyl/smolcoder) (MIT License, © Leon van Zyl), designed for more robust and capable AI agentic workflows. It takes the core principles of SMOL Coder and injects production-ready features to handle real-world complexity.
+
+> This project is a fork of [leonvanzyl/smolcoder](https://github.com/leonvanzyl/smolcoder). The original copyright notice and MIT license are preserved in [`LICENSE`](./LICENSE).
 
 ## ✨ Key Enhancements
 
@@ -23,22 +25,63 @@ Reliability is at the core of SMOL Coder Plus.
 ## 🚀 Getting Started
 
 ### Installation
-To install the global `smolcoder` command with the Plus enhancements:
+To install the global `smolcoder-plus` command:
 
 ```bash
-# Navigate to the smol directory
-cd smol
-
-# Install globally
+# From the project root
 npm install -g .
 ```
 
-### Configuration
-Ensure you have your Brave API key set up in a `.env` file in your project root:
+For development (keeps the command linked to your working tree, so edits
+take effect after a rebuild):
+
+```bash
+npm install
+npm run build
+npm link          # adds the `smolcoder-plus` command
+```
+
+Unlink later with `npm unlink -g smolcoder-plus` (or `npm rm -g smolcoder-plus`).
+
+### 🌐 Internet Search — Setup & Usage Guide
+
+The agent ships with a `web_search` tool (Brave Search API) that it calls
+automatically whenever it needs up-to-date information from the live web —
+you don't need to invoke it manually. Just ask, e.g. *"What's the latest
+stable version of TypeScript?"* and the agent will search and cite sources.
+
+**1. Get a free API key**
+
+1. Create a free account at [brave.com/search/api](https://brave.com/search/api/).
+2. In the dashboard, create an API key. The free plan includes 1 query/second
+   and 2,000 queries/month — plenty for agent use.
+
+**2. Add the key to a `.env` file**
+
+Put a `.env` file in your **project root**:
 
 ```env
 BRAVE_API_KEY=your_api_key_here
 ```
+
+- The loader walks **up from the current directory** to find `.env`, so the
+  agent works from any subdirectory of the project.
+- A real exported environment variable always wins over `.env` values:
+  `export BRAVE_API_KEY=...` is a valid alternative (useful for CI).
+- Keep the key secret — never commit `.env` (add it to `.gitignore`).
+
+**3. Verify it works**
+
+Run the agent in your project and ask something that requires live data.
+If the key is missing, the tool returns `Error: Missing BRAVE_API_KEY
+environment variable.` — that's your cue to set it up.
+
+**Notes**
+
+- Results are capped at 8 per call (default 5) and truncated to ~3,000 chars
+  to keep the context window clean.
+- No key? Everything else (file tools, shell, planning, TUI/Web UI) works
+  normally — only `web_search` is unavailable.
 
 ## 🏗️ Architecture
 - **Core Agent**: Enhanced with better planning and tool-use logic.

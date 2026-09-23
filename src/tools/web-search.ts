@@ -66,7 +66,10 @@ async function fetchWithTimeout(url: string, options: Record<string, any> = {}):
 /** Truncate at the end (with a short tail note) — used for search output. */
 export function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
-  return text.slice(0, max - 20) + "\n... (truncated)";
+  // Calculate how much to cut so that the note is exactly part of the total length
+  const note = "\n... (truncated)";
+  const cutOff = max - note.length;
+  return text.slice(0, cutOff) + note;
 }
 
 /** Format raw Brave results into numbered titles, snippets and URLs. */

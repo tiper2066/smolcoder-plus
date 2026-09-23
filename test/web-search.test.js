@@ -33,11 +33,26 @@ test("webSearch returns a clear error when BRAVE_API_KEY is missing", async () =
   // Simulate the key not being available to this process.
   const saved = process.env.BRAVE_API_KEY;
   delete process.env.BRAVE_API_KEY;
+  // loadDotEnv() walks up from process.cwd() and would re-read the repo's .env
+  // (which holds a real key). Run from a clean temp dir so no .env is found,
+  // and mock fetch so nothing hits the network.
+  const os = require("node:os");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "smol-"));
+  const savedCwd = process.cwd();
+  const cleanup = await withMockedFetch(async () => {
+    throw new Error("network should not be reached when the key is missing");
+  });
+  process.chdir(tmp);
   try {
     const out = await webSearch("anything");
     assert.equal(out, "Error: Missing BRAVE_API_KEY environment variable.");
   } finally {
+    process.chdir(savedCwd);
+    await cleanup();
     if (saved !== undefined) process.env.BRAVE_API_KEY = saved;
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
 
@@ -104,7 +119,7 @@ test("webSearch reports a friendly error when the Brave API returns a non-ok sta
 test("webSearch caps output length and appends a truncation note on large responses", async () => {
   const cleanup = await withMockedFetch(async () => {
     return new Response(
-      JSON.stringify({ web: { results: [{ title: "Big Title", description: "x".repeat(5000), url: "https://big.example" }] } }),
+      JSON.stringify({ web: { results: [{ title: "Big Title", description: "x".repeat(10000), url: "https://big.example" }] } }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   });
@@ -114,7 +129,7 @@ test("webSearch caps output length and appends a truncation note on large respon
     const out = await webSearch("example query");
     assert.ok(out.includes("... (truncated)"), "large snippet should be truncated with a note");
     // MAX_OUTPUT_CHARS is 3000 in web-search.ts; allow a small tail-note slack.
-    assert.ok(out.length <= 3050, `output should stay near the cap (${out.length})`);
+    assert.ok(out.length <= 3000, `output should stay near the cap (${out.length})`);
   } finally {
     await cleanup();
     delete process.env.BRAVE_API_KEY;
