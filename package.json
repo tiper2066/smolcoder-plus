@@ -24,7 +24,7 @@
     "url": "https://github.com/leonvanzyl/smolcoder/issues"
   },
   "bin": {
-    "smolcoder-plus": "./dist/index.js"
+    "smolcoder-plus": "dist/index.js"
   },
   "main": "dist/index.js",
   "files": [
