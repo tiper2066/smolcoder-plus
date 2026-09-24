@@ -1,8 +1,30 @@
 # B 방안 — 소스 코드에 인터넷 검색 도구 통합 (구현 계획서)
 
-**상태:** 계획 중 / 구현 전
+**상태:** ✅ 완료 (2026-09-23 구현, 2026-09-24 `smolcoder-plus@1.0.0`으로 npm 발행 확인)
 **결정일:** 2026-09-23
 **관련 결정:** 사용자 선택 **(A)** Brave 유지 + **B** 소스 통합
+
+## ✅ 구현 완료 요약 (2026-09-24)
+
+| 항목 | 결과 |
+|------|------|
+| `src/tools/web-search.ts` | ✅ 작성 완료 (`scripts/search.js` 로직의 TS 이식 + `.env` 탐색을 **부모 디렉터리까지 ascend**하는 방식으로 개선) |
+| `src/tools/index.ts` | ✅ `web_search` spec 등록 (read 배열 → ro/edit/bypass 모든 모드) + `executeTool` case 추가 |
+| `test/web-search.test.js` | ✅ 6개 테스트 (포맷팅·truncate·키 누락 에러·mock fetch 파이프라인·403·네트워크 실패) — `npm test` 통과 |
+| `scripts/search.js` | ✅ **삭제** (git history에 백업 존재) |
+| `.env` | ✅ 루트 유지, `.gitignore`에 추가, dist/발행 tarball에 미포함 확인 |
+| README.md | ✅ "🌐 Internet Search — Setup & Usage Guide" 섹션 추가 (키 발급, `.env` 설정, 사용법) |
+| npm 발행 | ✅ `smolcoder-plus@1.0.0` tarball에 `dist/tools/web-search.js` 포함 확인, 실제 키 값 누출 없음 |
+
+**검증 이력 (2026-09-24):**
+1. `npm run build` → TypeScript 에러 없음, `dist/tools/web-search.js` 생성.
+2. `npm test` (build + `scripts/test.cjs`) → 전체 스위트 통과 (기존 8개 도구 regression 없음).
+3. 새 키(Brave 대시보드에서 rotate된 키)로 `web_search` 실제 호출 → 정상 결과 반환.
+4. `npm pack smolcoder-plus@1.0.0` → tarball에 `.env` 없음, `BRAVE_API_KEY` 문자열 3곳 전부 `process.env.BRAVE_API_KEY` 코드 참조(실제 키 값 0건).
+
+**계획 대비 변경점:**
+- 계획서 단계 1의 `loadDotEnv`는 `process.cwd()` 기준이었으나, 실제 구현은 **cwd부터 루트까지 ascend**하며 `.env`를 찾는다 (README "Recursive .env Loading" 항목). 서브디렉터리에서 실행해도 키를 찾는다.
+- 계획서 3.1의 테스트 파일 위치 `smol/src/tools/web-search.test.js` → 실제는 `test/web-search.test.js` (코드 이동으로 `smol/` 폴더가 루트로 통합된 것, commit 467bc18).
 
 ---
 
@@ -77,8 +99,8 @@ if (!(key in process.env)) process.env[key] = value; // 이미 설정된 값은 
 
 ## 4. 상세 단계별 구현 계획
 
-### 📌 단계 1 — 도구 실행체 작성 (`src/tools/web-search.ts`)
-`scripts/search.js`의 핵심 로직을 TypeScript로 이전한다.
+### 📌 단계 1 — 도구 실행체 작성 (`src/tools/web-search.ts`) ✅
+`scripts/search.js`의 핵심 로직을 TypeScript로 이전한다. (`.env` 탐색은 cwd부터 루트까지 ascend하는 방식으로 구현됨)
 
 ```typescript
 // smol/src/tools/web-search.ts
@@ -121,7 +143,7 @@ export function webSearch(query: string, maxResults?: number): Promise<string> {
 - `.env` 로드에서 `process.cwd()` 기준 (smol이 프로젝트 루트 cwd로 실행됨).
 - 에러 메시지는 에이전트가 이해하기 쉬운 형태로 반환.
 
-### 📌 단계 2 — 툴 스펙 등록 (`index.ts`의 read 배열)
+### 📌 단계 2 — 툴 스펙 등록 (`index.ts`의 read 배열) ✅
 `read_file`, `list_files`, `search`(로컬) 다음에 `web_search`를 추가한다.
 **description은 small-model 친화적으로**: flat 파라미터 + 예제 호출 포함.
 
@@ -144,7 +166,7 @@ export function webSearch(query: string, maxResults?: number): Promise<string> {
 **mode 조건 확인**: read 배열이 `ro` 모드에도 포함되므로, `web_search`는 ro 모드에서도 동작한다.
 (원하지 않으면 read 배열 대신 write/exec 배열로 옮기거나 mode별 필터링 추가.)
 
-### 📌 단계 3 — 실행 분기 추가 (`executeTool`)
+### 📌 단계 3 — 실행 분기 추가 (`executeTool`) ✅
 switch에 case를 추가한다.
 
 ```typescript
@@ -156,7 +178,7 @@ case "web_search": {
 }
 ```
 
-### 📌 단계 4 — 빌드 및 검증
+### 📌 단계 4 — 빌드 및 검증 ✅
 ```bash
 cd smol
 npm install            # 로컬 devDependencies (typescript 등)
@@ -166,7 +188,7 @@ node scripts/test.cjs  # 기존 테스트 통과 확인
 - TypeScript 에러가 없어야 함.
 - `.env`가 dist에 들어가지 않았는지 확인 (`grep BRAVE_API_KEY dist/`).
 
-### 📌 단계 5 — 통합 후 동작 검증 (스탠드alone)
+### 📌 단계 5 — 통합 후 동작 검증 (스탠드alone) ✅
 새 프로젝트 폴더(`test-project/`)를 만들어서:
 ```bash
 node <dist/bin> --workspace test-project   # 또는 실제 실행 경로 확인
@@ -195,6 +217,8 @@ node <dist/bin> --workspace test-project   # 또는 실제 실행 경로 확인
 4. 기존 8개 도구 동작 유지 (regression 없음).
 5. dist产物에 `.env`/키 값이 없음.
 
+→ **5개 항목 모두 2026-09-24 확인 완료** (상단 "구현 완료 요약" 참조).
+
 ### ⚠️ 실패 시 대체책
 - TypeScript 빌드 환경 문제 → `npm install` 후 재시도.
 - `.env` 로드 경로는 smol의 실제 cwd가 프로젝트 루트인지 확인 필요 (실행 방식에 따라 조정).
@@ -202,12 +226,12 @@ node <dist/bin> --workspace test-project   # 또는 실제 실행 경로 확인
 
 ---
 
-## 7. 다음 단계 (구현 시작 시)
-1. `smol/src/tools/web-search.ts` 작성 (단계 1).
-2. `index.ts` 수정 (단계 2, 3).
-3. 빌드 + 검증 (단계 4, 5).
-4. `scripts/search.js` 보관/삭제 결정.
+## 7. 다음 단계 (구현 시작 시) — ✅ 모두 완료 (2026-09-23)
+1. ✅ `src/tools/web-search.ts` 작성 (단계 1).
+2. ✅ `index.ts` 수정 (단계 2, 3).
+3. ✅ 빌드 + 검증 (단계 4, 5).
+4. ✅ `scripts/search.js` 삭제 (git history에 백업 존재).
 
 ---
 
-*이 계획서는 구현 전 검토용입니다. 각 단계마다 빌드로 검증을 진행합니다.*
+*이 계획서는 구현 전 검토용입니다. 각 단계마다 빌드로 검증을 진행합니다. — 2026-09-23 구현 완료, 2026-09-24 `smolcoder-plus@1.0.0`으로 발행.*
