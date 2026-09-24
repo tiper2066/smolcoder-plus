@@ -5,15 +5,21 @@ Enable users to install the tool globally using `npm install -g smolcoder-plus` 
 
 ## ✅ Status: COMPLETED & PUBLISHED (2026-09-24)
 
-**`smolcoder-plus@1.0.0` is live on npm:** https://www.npmjs.com/package/smolcoder-plus
+**`smolcoder-plus@1.0.1` is live on npm:** https://www.npmjs.com/package/smolcoder-plus
 
 ```bash
 npm install -g smolcoder-plus
-smolcoder-plus
+smolp            # short alias — same command
 ```
 
 Verified end-to-end: `npm publish` → `npm view` → fresh `npm install` from the
-registry → `smolcoder-plus --version` prints `1.0.0`.
+registry → both `smolp --version` and `smolcoder-plus --version` print `1.0.1`.
+
+### 1.0.1 — `smolp` alias (2026-09-24)
+- `bin` now ships **two** entries: `smolp` and `smolcoder-plus` (same entry point).
+- CLI messages use the command the user actually typed (`CMD` in `src/index.ts`),
+  so help/errors/web banner say `smolp` when launched as `smolp`.
+- README install section documents both commands.
 
 ## Current Status
 - ✅ Source code is organized in the root directory.
