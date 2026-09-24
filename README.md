@@ -93,6 +93,25 @@ environment variable.` — that's your cue to set it up.
 - No key? Everything else (file tools, shell, planning, TUI/Web UI) works
   normally — only `web_search` is unavailable.
 
+### 🖥️ Web UI — Browser Interface
+
+Prefer a browser over the terminal? Run:
+
+```bash
+smolp --web            # or: smolcoder-plus --web
+```
+
+- Serves the UI at **http://127.0.0.1:7433** (default port — pass a number to
+  override: `smolp --web 8080`).
+- Shows a **sidebar of your workspaces and sessions**, plus an embedded
+  browser and terminal panel so you can watch the agent work.
+- Run it from a project directory to start a session there immediately, or
+  from anywhere (e.g. your home directory) to pick a workspace in the sidebar.
+- A second `smolp --web` from another folder won't start a new server — it
+  adds that folder to the already-running UI and prints its URL.
+- Port already taken? It tells you the next one to try: `smolp --web 7434`.
+- **Ctrl+C** stops the server.
+
 ## 🏗️ Architecture
 - **Core Agent**: Enhanced with better planning and tool-use logic.
 - **Web Search Tool**: A dedicated module for interacting with Brave Search.
