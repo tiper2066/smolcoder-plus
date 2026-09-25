@@ -40,7 +40,7 @@ smol/src/web/
 - `page.ts`의 `LOGO_TEXT`도 동일한 raw literal 안에 있으므로 동일 제약 적용.
 
 ### 1.3 로고 구조 (`src/logo.ts`)
-- `LOGO_ROWS: readonly string[]` — 6줄의 block art 문자열 (각 줄 "SMOL"을 블록 글자로 만든 형태).
+- `LOGO_ROWS: readonly string[]` — 6줄의 block art 문자열 (각 줄 "SMOL+"를 블록 글자로 만든 형태, 6줄 × 49-char).
 - `LOGO_TEXT = LOGO_ROWS.map(r => r.trimEnd()).join("\n")` — `page.ts`가 이를 import해 좌상단 로고로 사용.
 - **"SMOL+" 변경 방법:** `LOGO_ROWS`의 6줄을 "SMOL+" 블록 글자로 다시 만들어 교체. (또는 1줄 fallback 문자열 사용)
 - **주의:** `page.ts`의 FAVICON이 "S" 글리프이므로 "SMOL+"에 맞게 변경 검토 (선택적).
@@ -68,7 +68,8 @@ smol/src/web/
 
 ### [x] **단계 1 — 로고 "SMOL" → "SMOL+" 변경** (난도: ★☆☆)
 - [x] `smol/src/logo.ts`의 `LOGO_ROWS` 6줄을 "SMOL+" 블록 글자로 교체 (또는 1줄 fallback)
-- [ ] (선택) `smol/src/web/page.ts`의 FAVICON "S" 글리프를 "SMOL+"에 맞게 변경
+- [x] (선택) FAVICON "S" 글리프는 그대로 유지 — 로고 변경과 무관하므로 생략 (사용자 요청: 로고만 정확히 표시)
+- [x] 검증: `npx tsc`로 빌드 성공 (`npm run build`의 `clean` 스크립트 쉘-쿼팅 버그로 인해 직접 `tsc` 실행), dist/logo.js 가 "SMOL+"를 정확히 렌더링 (S M O L +, 6줄 × 49-char, L/+ 상단 `╗` col 31) — 테스트 없이 빌드 + 렌더링 확인
 - [x] 검증: `npm run build` + `npm test` 통과, 로고 렌더링 확인 (`S M O L +` 정확히 표시)
 
 ### [ ] **단계 2 — 좌측 사이드바에 파일 트리 탭 추가** (난도: ★★☆)
@@ -119,4 +120,4 @@ smol/src/web/
 
 ---
 
-*검토 및 구현 완료: 단계 1(로고 "SMOL" → "SMOL+") 구현·적용 완료 (`S M O L +` 정확히 표시, `npm run build`/`npm test` 통과). 단계 2·3은 미개시.*
+*검토 및 구현 완료: 단계 1(로고 "SMOL" → "SMOL+") 구현·적용 완료 (`S M O L +` 정확히 표시, `npx tsc`로 빌드 성공, dist/logo.js 렌더링 확인). 단계 2·3은 미개시.*
