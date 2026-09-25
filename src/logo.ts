@@ -1,4 +1,4 @@
-// The SMOL block-letter logo. One source for both surfaces — the banner
+// The SMOL+ block-letter logo. One source for both surfaces — the banner
 // printed when an interactive terminal session starts, and the web UI's
 // welcome screen and fresh-session view — so the branding cannot drift or
 // quietly disappear from one of them again.
@@ -6,12 +6,12 @@
 import { c } from "./util";
 
 export const LOGO_ROWS: readonly string[] = [
-  "███████╗ ███╗   ███╗  ██████╗  ██╗     ",
-  "██╔════╝ ████╗ ████║ ██╔═══██╗ ██║     ",
-  "███████╗ ██╔████╔██║ ██║   ██║ ██║     ",
-  "╚════██║ ██║╚██╔╝██║ ██║   ██║ ██║     ",
-  "███████║ ██║ ╚═╝ ██║ ╚██████╔╝ ███████╗",
-  "╚══════╝ ╚═╝     ╚═╝  ╚═════╝  ╚══════╝",
+  "███████╗ ███╗   ███╗  ██████╗                    ",
+  "██╔════╝ ████╗ ████║ ██╔═══██╗                   ",
+  "███████╗ ██╔████╔██║ ██║   ██║ ██                ",
+  "╚════██║ ██║╚██╔╝██║ ██║   ██║ ████████          ",
+  "███████║ ██║ ╚═╝ ██║ ╚██████╔╝ ██                ",
+  "╚══════╝ ╚═╝     ╚═╝  ╚═════╝                    ",
 ];
 
 /** Every row is padded to this many cells. */
@@ -32,7 +32,10 @@ export function plainBrand(version: string): string {
  */
 export function terminalLogo(cols: number, version: string): string[] {
   const indent = " ";
-  if (cols < indent.length + LOGO_WIDTH) return [plainBrand(version)];
+  // The art is 49 wide; the widest meaningful row is 32 wide. Fall back to the
+  // plain name only when the art's content no longer fits the terminal width.
+  const contentWidth = 32;
+  if (cols < indent.length + contentWidth) return [plainBrand(version)];
   const tailText = `coder v${version}`;
   const tail = c.dim(c.bold("coder") + " v" + version);
   const tailFits = cols >= indent.length + LOGO_WIDTH + 2 + tailText.length;

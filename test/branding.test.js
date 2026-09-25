@@ -8,10 +8,18 @@ const { STYLES } = require('../dist/web/styles');
 
 const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
-test('logo rows spell SMOL in equal-width block letters', () => {
+test('logo rows spell SMOL+ in equal-width block letters', () => {
   assert.equal(LOGO_ROWS.length, 6);
   for (const r of LOGO_ROWS) assert.equal(r.length, LOGO_ROWS[0].length, 'row width differs: ' + r);
-  assert.ok(LOGO_ROWS[0].startsWith('███████╗ ███╗   ███╗  ██████╗  ██╗'), 'first row is not the S M O L cap');
+  assert.ok(LOGO_ROWS[0].startsWith('███████╗ ███╗   ███╗  ██████╗'), 'first row is not the S M O L cap');
+  // The "+" is a 3-row plus sign: vertical bar rows 2 & 4, horizontal bar row 3.
+  const plusCol = 31;
+  assert.equal(LOGO_ROWS[0].slice(plusCol).trim(), '', '+ rows 0-1 must be blank');
+  assert.equal(LOGO_ROWS[1].slice(plusCol).trim(), '', '+ rows 0-1 must be blank');
+  assert.ok(LOGO_ROWS[2].slice(plusCol).includes('██'), '+ row 2 needs the vertical bar');
+  assert.ok(LOGO_ROWS[3].slice(plusCol).includes('████████'), '+ row 3 needs the horizontal bar');
+  assert.ok(LOGO_ROWS[4].slice(plusCol).includes('██'), '+ row 4 needs the vertical bar');
+  assert.equal(LOGO_ROWS[5].slice(plusCol).trim(), '', '+ row 5 must be blank');
 });
 
 test('terminal session banner shows the block logo on a normal-width terminal', () => {
