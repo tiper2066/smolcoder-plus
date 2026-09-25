@@ -12,14 +12,15 @@ test('logo rows spell SMOL+ in equal-width block letters', () => {
   assert.equal(LOGO_ROWS.length, 6);
   for (const r of LOGO_ROWS) assert.equal(r.length, LOGO_ROWS[0].length, 'row width differs: ' + r);
   assert.ok(LOGO_ROWS[0].startsWith('███████╗ ███╗   ███╗  ██████╗'), 'first row is not the S M O L cap');
-  // The "+" is a 3-row plus sign: vertical bar rows 2 & 4, horizontal bar row 3.
-  const plusCol = 31;
-  assert.equal(LOGO_ROWS[0].slice(plusCol).trim(), '', '+ rows 0-1 must be blank');
-  assert.equal(LOGO_ROWS[1].slice(plusCol).trim(), '', '+ rows 0-1 must be blank');
-  assert.ok(LOGO_ROWS[2].slice(plusCol).includes('██'), '+ row 2 needs the vertical bar');
-  assert.ok(LOGO_ROWS[3].slice(plusCol).includes('████████'), '+ row 3 needs the horizontal bar');
-  assert.ok(LOGO_ROWS[4].slice(plusCol).includes('██'), '+ row 4 needs the vertical bar');
-  assert.equal(LOGO_ROWS[5].slice(plusCol).trim(), '', '+ row 5 must be blank');
+  // The "+" is a full-height plus sign after "SMOL ": a vertical stem runs
+  // every row, crossed by a 2-row horizontal bar at rows 2-3.
+  const plusCol = 40;
+  assert.ok(LOGO_ROWS[0].slice(plusCol).includes('██'), '+ row 0 needs the vertical stem');
+  assert.ok(LOGO_ROWS[1].slice(plusCol).includes('██'), '+ row 1 needs the vertical stem');
+  assert.ok(LOGO_ROWS[2].slice(plusCol).includes('██'), '+ row 2 needs the horizontal bar');
+  assert.ok(LOGO_ROWS[3].slice(plusCol).includes('██'), '+ row 3 needs the horizontal bar');
+  assert.ok(LOGO_ROWS[4].slice(plusCol).includes('██'), '+ row 4 needs the vertical stem');
+  assert.ok(LOGO_ROWS[5].slice(plusCol).includes('╚═╝'), '+ row 5 needs the stem\'s closing cap');
 });
 
 test('terminal session banner shows the block logo on a normal-width terminal', () => {
@@ -29,7 +30,7 @@ test('terminal session banner shows the block logo on a normal-width terminal', 
 });
 
 test('terminal banner keeps the art and drops the tail to its own line when only the art fits', () => {
-  const lines = terminalLogo(45, '9.9.9').map(strip);
+  const lines = terminalLogo(55, '9.9.9').map(strip);
   for (const r of LOGO_ROWS) assert.ok(lines.some((l) => l.includes(r.trimEnd())), 'missing row: ' + r);
   assert.ok(lines.some((l) => l.trim() === 'coder v9.9.9'), 'tail should be on its own line');
 });

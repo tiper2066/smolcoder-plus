@@ -2,6 +2,7 @@
 
 **작성자:** smolcoder
 **작성일:** 2026-09-23
+**최종 업데이트:** 2026-09-25 (SMOL+ 로고 테스트 수정 반영)
 **프로젝트:** smolcoder-plus v1.0.1 (전역 bin: `smolp` / `smolcoder-plus`)
 **관련 계획서:** `docs/IMPLEMENTATION-PLAN-web-search-integration.md`, `docs/IMPLEMENTATION-PLAN-global-install.md`, `docs/handoff.md`
 
@@ -69,8 +70,9 @@ smol/src/web/
 ### [x] **단계 1 — 로고 "SMOL" → "SMOL+" 변경** (난도: ★☆☆)
 - [x] `smol/src/logo.ts`의 `LOGO_ROWS` 6줄을 "SMOL+" 블록 글자로 교체 (또는 1줄 fallback)
 - [x] (선택) FAVICON "S" 글리프는 그대로 유지 — 로고 변경과 무관하므로 생략 (사용자 요청: 로고만 정확히 표시)
-- [x] 검증: `npx tsc`로 빌드 성공 (`npm run build`의 `clean` 스크립트 쉘-쿼팅 버그로 인해 직접 `tsc` 실행), dist/logo.js 가 "SMOL+"를 정확히 렌더링 (S M O L +, 6줄 × 49-char, L/+ 상단 `╗` col 31) — 테스트 없이 빌드 + 렌더링 확인
+- [x] 검증: `npx tsc`로 빌드 성공 (`npm run build`의 `clean` 스크립트 쉘-쿼팅 버그로 인해 직접 `tsc` 실행), dist/logo.js 가 "SMOL+"를 정확히 렌더링 (S M O L +, 6줄 × 49-char) — 테스트 없이 빌드 + 렌더링 확인
 - [x] 검증: `npm run build` + `npm test` 통과, 로고 렌더링 확인 (`S M O L +` 정확히 표시)
+- [x] 검증(2026-09-25): `test/branding.test.js` 수정 후 `npm run build && npm test` 통과 (154/154, branding 단독 6/6) — 상세는 §6 참고
 
 ### [ ] **단계 2 — 좌측 사이드바에 파일 트리 탭 추가** (난도: ★★☆)
 - [ ] 사이드바 상단에 "세션 / 파일" 탭 전환 UI 추가
@@ -103,7 +105,7 @@ smol/src/web/
 
 ## 4. 예상될 수 있는 이슈 및 대체책
 
-- **block art 문자열 제작** — "SMOL+" 5글자 block art를 6줄로 만들 때 각 줄 길이가 LOGO_WIDTH(=31)에 맞춰야 UI 깨짐 방지.
+- **block art 문자열 제작** — "SMOL+" 5글자 block art를 6줄로 만들 때 각 줄 길이가 LOGO_WIDTH(=49)에 맞춰야 UI 깨짐 방지.
 - **큰 파일 처리** — 파일이 크면 textarea 대신 스크롤 또는 페이지네이션 필요.
 - **저장 API 부재** — `/fs/contents`가 읽기 전용이므로, 파일 저장용 POST API를 `hub.ts`에 추가 필요.
 - **backtick 실수** — client.ts에서 리터럴 백틱을 쓰면 빌드/런타임 에러 → `\`` 로 반드시 escape.
@@ -117,6 +119,35 @@ smol/src/web/
 - 클라이언트 JS: `smol/src/web/client.ts` (panel, side drawer, fsState)
 - 서버 API: `smol/src/web/hub.ts` (`/fs/contents`, fsState, 파일 쓰기)
 - 스타일: `smol/src/web/styles.ts` (#side, #panel, #paneltabs, .tab)
+
+---
+
+## 6. 2026-09-25 작업 — SMOL+ 로고 테스트 수정 (branding 실패 해소)
+
+### 6.1 증상
+- `npm test`에서 branding 테스트 실패 (재현 시점: `logo rows spell SMOL+ ... row width differs: 42 !== 41` 1건, 디자인·폭 불일치로 인한 latent 실패 2건).
+
+### 6.2 실패 원인
+1. **plus 검증 스펙 불일치 (`plusCol=31`):** 구 테스트는 폭을 거의 안 늘리고 L 칸 안쪽에 3행짜리 작은 `+`(0-1행 blank, 2-4행만)를 가정. 31은 `S8+공백1+M11+공백1+O9+공백1 = 31` 즉 L 시작점이라 L 픽셀 때문에 통과 불가. 실제 디자인은 6행 전체 높이 `+`라 스펙 자체가 다름.
+2. **45열 임계값 이슈:** 로고 폭 39→49열로 증가. `terminalLogo(45)`는 아트 표시 조건 `1+49=50`을 못 채워 폴백하는데 테스트는 아트를 기대함.
+3. **소스 불량:** `src/logo.ts` 행 폭이 41/42/47/46으로 불일치, `██████╗ ██║` 잔재 + `╗→║` 오타 존재.
+
+### 6.3 조치 (소스 디자인은 유지, 테스트를 실제 디자인에 맞춤 + 오타 수정)
+- `src/logo.ts:8-15` — 6행 모두 49열로 통일, 전체 높이 `+` 글리프로 교체:
+  - row 0-1/4-5: 수직 스템 (`██╗` / `██║` / `╚═╝`)
+  - row 2-3: 수평바 (`╔══██╚══╗` / `╚══██╔══╝`)
+- `test/branding.test.js:17-23` — `plusCol 31→40`, 6행 스템 + 2-3행 수평바 검증으로 변경.
+- `test/branding.test.js:33` — `terminalLogo(45→55)`. 50열 이상에서 아트 표시, tail은 별도 줄.
+- narrow 케이스(`30열`)의 `assert.equal(lines.length, 1)` 엄격 검증 유지.
+- 반드시 `npm run build`를 먼저 실행해 `dist/logo.js` 갱신 후 테스트.
+
+### 6.4 검증
+- `npm run build && npm test` → tests 154 / pass 154 / fail 0.
+- `node --test test/branding.test.js` → 6/6 통과.
+
+### 6.5 참고 — 제안 base64 패치와의 차이 2건
+- 제안 `logo.ts` payload는 `/**` 여는 주석이 빠져 있어 그대로 적용 시 주석 깨짐 → 기존 정상 주석 유지하고 `LOGO_ROWS`만 교체.
+- 제안 테스트 payload는 narrow 케이스를 `assert.equal`에서 `assert.ok(lines.length, 1)`로 약화 → 엄격한 `assert.equal` 유지.
 
 ---
 
