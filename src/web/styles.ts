@@ -45,7 +45,7 @@ export const STYLES = String.raw`
   #side { width: 272px; flex: none; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
   #side.collapsed { display: none; }
   .sidehdr { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 14px; }
-  /* The SMOL block logo, sized so all 49 columns fit beside the collapse button. */
+  /* The SMOL block logo, sized so all 53 columns fit beside the collapse button. */
   .brand { color: var(--accent); white-space: pre; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 4px; line-height: 1.15; }
   #openfolder { margin: 2px 10px 10px; text-align: left; }
   #wslist { flex: 1; overflow-y: auto; padding: 0 6px 10px; }
