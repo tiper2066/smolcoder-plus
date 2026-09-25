@@ -2,7 +2,7 @@
 
 **작성자:** smolcoder
 **작성일:** 2026-09-23
-**최종 업데이트:** 2026-09-25 (SMOL+ 로고 테스트 수정 반영)
+**최종 업데이트:** 2026-09-25 (+ 수평바 1줄+그림자로 다듬음)
 **프로젝트:** smolcoder-plus v1.0.1 (전역 bin: `smolp` / `smolcoder-plus`)
 **관련 계획서:** `docs/IMPLEMENTATION-PLAN-web-search-integration.md`, `docs/IMPLEMENTATION-PLAN-global-install.md`, `docs/handoff.md`
 
@@ -148,6 +148,22 @@ smol/src/web/
 ### 6.5 참고 — 제안 base64 패치와의 차이 2건
 - 제안 `logo.ts` payload는 `/**` 여는 주석이 빠져 있어 그대로 적용 시 주석 깨짐 → 기존 정상 주석 유지하고 `LOGO_ROWS`만 교체.
 - 제안 테스트 payload는 narrow 케이스를 `assert.equal`에서 `assert.ok(lines.length, 1)`로 약화 → 엄격한 `assert.equal` 유지.
+
+---
+
+## 7. 2026-09-25 작업 — `+` 수평바 다듬기 (2줄 솔리드 → 1줄+그림자)
+
+### 7.1 배경
+- `docs/smolp_logo.png` 기준 로고와 비교 시 `+` 수평바가 속 빈 외곽선(`╔══██╚══╗` / `╚══██╔══╝`)으로 보여 1차로 2줄 솔리드로 채움.
+- 2줄 솔리드는 높이가 너무 두꺼워 보여 2차로 다듬음 (사용자 확인 완료).
+
+### 7.2 조치 (`src/logo.ts` 2행만 교체, 전체 폭 49 유지)
+- row 2: `... ██║     ██████████` — 수평바 1줄 솔리드 (수직 스템 `██` 2칸 너비와 같은 굵기).
+- row 3: `... ██║     ╚═══██═══╝` — 수평바 아래에 다른 글자 밑면처럼 겹선 그림자, 가운데로 수직 스템 `██` 통과.
+- 터미널·웹UI 공통 소스라 한 곳만 고치면 둘 다 반영. `test/branding.test.js` 변경 없음 (기존 plus 검증 그대로 통과).
+
+### 7.3 검증
+- `npm test` → tests 154 / pass 154 / fail 0.
 
 ---
 
