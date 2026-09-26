@@ -28,6 +28,26 @@ function tmpdir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+// ---- client bundle (browser JS that ships as one string) ---------------------
+// client.ts is a String.raw template, so `tsc` only ever sees a string: a plain
+// JS syntax error inside it (a missing brace, say) builds fine and then kills
+// the whole page in the browser. These two tests are the guard for that — they
+// cover the failure modes nothing else here can see.
+
+const { CLIENT_JS } = require("../dist/web/client");
+const { PAGE_HTML } = require("../dist/web/page");
+
+test("web: the client bundle compiles as JavaScript", () => {
+  // Compiles without running, so no DOM is needed: a SyntaxError is all we want.
+  assert.doesNotThrow(() => new Function(CLIENT_JS));
+});
+
+test("web: every element the client looks up by id exists in the page", () => {
+  const wanted = [...new Set([...CLIENT_JS.matchAll(/\$\("([A-Za-z0-9_-]+)"\)/g)].map((m) => m[1]))];
+  const missing = wanted.filter((id) => !PAGE_HTML.includes(`id="${id}"`));
+  assert.deepEqual(missing, [], `client.ts looks up ids the page does not define: ${missing.join(", ")}`);
+});
+
 // ---- channel -----------------------------------------------------------------
 
 function makeChannel(id = "s1") {

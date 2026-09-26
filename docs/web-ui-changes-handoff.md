@@ -1,170 +1,318 @@
-# 📋 Handoff — Web UI 수정 및 기능 추가 (SMOL Coder Plus)
+# 📋 Handoff — Web UI: 파일 트리 + File Edit 패널 (SMOL Coder Plus)
 
 **작성자:** smolcoder
 **작성일:** 2026-09-23
-**최종 업데이트:** 2026-09-25 (+ 수평바 1줄+그림자로 다듬음)
-**프로젝트:** smolcoder-plus v1.0.1 (전역 bin: `smolp` / `smolcoder-plus`)
+**최종 업데이트:** 2026-09-26 (전제 검증 후 재작성 — 기존 `/fs/contents` 전제가 실제로는 없었음)
+**프로젝트:** smolcoder-plus v1.0.5 (전역 bin: `smolp` / `smolcoder-plus`)
 **관련 계획서:** `docs/IMPLEMENTATION-PLAN-web-search-integration.md`, `docs/IMPLEMENTATION-PLAN-global-install.md`, `docs/handoff.md`
 
 > 이 문서는 새 세션이 작업 시작 전에 **현황을 빠르게 파악**하고 각 단계를 체크할 수 있도록 작성된 것입니다.
-> Web UI 소스는 `smol/src/web/` 아래에 있습니다 (`hub.ts`, `page.ts`, `client.ts`, `styles.ts`, `logo.ts`).
+> **이 문서의 코드 위치는 2026-09-26에 실제 소스로 검증한 값입니다.** 문서와 코드가 다르면 코드를 먼저 확인하고 이 문서를 고치세요.
 
 ---
 
-## 0. 결정 배경 (5분이면 충분)
+## 0. 목표와 현재 상태
 
-**목표:** `smol --web` 으로 시작된 Web UI를 개선한다.
+**목표:** `smolp --web` Web UI에 두 가지 기능 추가.
 
-1. **로고 변경** — 좌상단 "SMOL" → "SMOL+"
-2. **파일 트리 표시** — 좌측 사이드바에 프로젝트 & 세션 영역 + 파일 트리 영역을 **탭 전환**으로 배치
-3. **파일 보기/편집/저장** — 우상단의 browser/terminal panel처럼 **File Edit 아이콘 패널**을 추가하고, 파일 트리에서 파일 클릭 시 해당 파일을 편집·저장
+1. **파일 트리** — 좌측 사이드바에 "세션 / 파일" 탭을 두고 워크스페이스 파일 트리 표시. 파일 클릭 시 composer에 경로 삽입(MVP) 또는 편집기에서 열기.
+2. **File Edit 패널** — 우상단 panel에 `file` kind 탭을 추가해 파일을 보고 편집·저장.
+3. **패널 전체화면 토글** — `⤢` 버튼 한 번으로 패널을 좌측 사이드바만 남는 전체 폭으로 확장. 좁은 기본 폭(최대 60%) 때문에 생기는 불편을 먼저 해소하는 선행 작업(단계 1-C).
 
-> 현재까지 **단계 1(로고 변경)을 구현·적용**했습니다. 아래 체크리스트를 하나씩 진행하세요.
+**현재 상태: 셋 다 미개시.** 1·2에 필요한 서버 API도 아직 없다(§1.3).
 
 ---
 
-## 1. 사전 지식 (실제 소스 분석 결과 — 반드시 먼저 읽기)
+## 0.1 🛡️ client.ts 구문 검사 안전망 (단계 0에서 완료 — 반드시 알아둘 것)
 
-### 1.1 Web UI 아키펌처
+`client.ts`는 `String.raw` 템플릿이라 **`tsc`는 그 안의 JS를 문자열로만 봅니다.** 즉:
+
+| 실측 결과 | 잡아내는가 |
+|---|---|
+| `${clientVar}` 보간 | ✅ `tsc`가 `error TS2304: Cannot find name 'a'` 로 잡음 |
+| 이스케이프 안 된 백틱 | ✅ `tsc`가 잡음 (unterminated template) |
+| **일반 JS 문법 오류(중괄호 누락 등)** | ❌ **`tsc` 통과 → 브라우저에서만 터지고 UI 전체 백 화면** |
+
+그래서 `test/web.test.js`에 가드 2개를 넣어 **이미 반영되어 있습니다**:
+
+```js
+test("web: the client bundle compiles as JavaScript", () => {
+  assert.doesNotThrow(() => new Function(CLIENT_JS));   // 컴파일만, 실행 안 함 → DOM 불필요
+});
+test("web: every element the client looks up by id exists in the page", () => {
+  const wanted = [...new Set([...CLIENT_JS.matchAll(/\$\("([A-Za-z0-9_-]+)"\)/g)].map((m) => m[1]))];
+  const missing = wanted.filter((id) => !PAGE_HTML.includes(`id="${id}"`));
+  assert.deepEqual(missing, [], `client.ts looks up ids the page does not define: ${missing.join(", ")}`);
+});
 ```
-smol/src/web/
-├── hub.ts        : HTTP 서버. `/fs/contents`, `/fs/read` 등 API 제공 (fsState 반환)
-├── page.ts       : HTML 페이지 생성. LOGO_TEXT(page.ts:LogoText)를 좌상단 로고에 주입, FAVICON은 "S" 글리프
-├── client.ts     : export const CLIENT_JS = String.raw`...` (브라우저 클라이언트 JS)
-├── styles.ts     : CSS
-└── logo.ts       : LOGO_ROWS / LOGO_TEXT (전역 로고 문자열 — page.ts가 import)
+
+**작업 규칙: `client.ts`를 건드린 뒤에는 `npm test`가 통과할 때까지 넘어가지 말 것.** 이 두 테스트가 tsc가 못 보는 것을 대신 잡아준다. (역검증 완료: 중괄호 하나 제거 → `SyntaxError: Unexpected token ')'` 검출 / 없는 id 추가 → 두 번째 테스트 실패)
+
+---
+
+## 1. 사전 지식 (실제 소스 분석 — 구현 전 반드시 읽을 것)
+
+### 1.1 `src/web/` 파일 구성 (7개)
+
+```
+src/web/
+├── hub.ts        (953줄) HTTP 서버. 라우팅 + 세션/터미널/업로드 API. fsState 반환
+├── page.ts       ( 93줄) PAGE_HTML 템플릿. DOM 구조가 정의된 곳
+├── client.ts     (1008줄) export const CLIENT_JS = String.raw`...` (브라우저 클라이언트 JS)
+├── styles.ts     (333줄) export const STYLES (CSS)
+├── channel.ts    (305줄) SessionChannel — 세션 입출력 adapter (readInput, handleMessage, SSE 이벤트)
+├── store.ts      (197줄) SessionStore / WorkspaceStore — ~/.smolcoder/ 아래 JSON 영속화
+└── terminal.ts   (188줄) 터미널(pty) 관리
 ```
 
-### 1.2 ⚠️ 가장 중요한 제약: `client.ts`의 backtick
-- `client.ts`는 `export const CLIENT_JS = String.raw\`...\`` **내부의 raw template literal**입니다.
-- 따라서 클라이언트 JS 안에 **리터럴 백틱(`)을 쓸 수 없습니다**. 백틱이 필요하면 반드시 `\`` 로 escape.
-- `page.ts`의 `LOGO_TEXT`도 동일한 raw literal 안에 있으므로 동일 제약 적용.
+### 1.2 ⚠️ 구현 시 반드시 지켜야 할 제약 3가지
 
-### 1.3 로고 구조 (`src/logo.ts`)
-- `LOGO_ROWS: readonly string[]` — 6줄의 block art 문자열 (각 줄 "SMOL+"를 블록 글자로 만든 형태, 6줄 × 49-char).
-- `LOGO_TEXT = LOGO_ROWS.map(r => r.trimEnd()).join("\n")` — `page.ts`가 이를 import해 좌상단 로고로 사용.
-- **"SMOL+" 변경 방법:** `LOGO_ROWS`의 6줄을 "SMOL+" 블록 글자로 다시 만들어 교체. (또는 1줄 fallback 문자열 사용)
-- **주의:** `page.ts`의 FAVICON이 "S" 글리프이므로 "SMOL+"에 맞게 변경 검토 (선택적).
+1. **`client.ts`는 raw template literal이다.** `export const CLIENT_JS = String.raw\`...\`` (client.ts:1 부근).
+   클라이언트 JS 안에 **리터럴 백틱(`)을 쓸 수 없다**. 필요하면 반드시 `` \` `` 로 escape. `page.ts`도 동일 제약.
+2. **모든 요청에 `?k=<token>` 이 붙는다.** 서버는 `url.searchParams.get("k") !== this.authToken` 이면 403 (hub.ts:673).
+   클라이언트에는 이미 `const k = ...` (client.ts:12)와 `post()` (client.ts:32, 자동으로 `?k=` append)가 있다.
+   **`fetch()`를 직접 쓰면 `k`를 빠뜨리기 쉽다** → `post()`를 쓰거나 `"path?k=" + k` 형태로 작성.
+3. **HTML 구조는 `page.ts`에서 고쳐야 한다.** 버튼·컨테이너를 추가하려면 `page.ts`의 `PAGE_HTML`과 `styles.ts`를 함께 손댄다.
 
-### 1.4 우상단 panel 시스템 (`src/web/client.ts`)
-- `panelEl` (`#panel`), `tabsEl` (`#paneltabs`), `views` Map으로 여러 panel view 관리.
-- 탭 종류: `browser` (URL 미리보기 iframe), `term` (터미널).
-- 버튼: `#btnbrowser`, `#btnterm` (토글), `+◎`/`+>_` (신규), `»` (숨기기).
-- `renderPanel()`이 active tab에 따라 panel을 다시 그음. `savePanel`/`loadPanel`이 localStorage에 저장.
-- **파일 에디터 패널 추가 시:** `browser`/`term`과 동일한 패턴으로 `file` kind tab을 확장하면 깨끗한 구현 가능.
+### 1.3 ⚠️ 기존 `/fs` API의 실체 (이전 문서의 오해 — 재사용 불가)
 
-### 1.5 좌측 사이드바 (`src/web/client.ts`, `src/web/styles.ts`)
-- `#side` 내부: `#sidedrawer` (프로젝트 이름 + 세션 목록 `#sessions`), `#main`, `#sidefooter`.
-- 세션 토글: `#sidetoggle`, `#sidedrawer` show/hide.
-- **파일 트리 추가 방법:** 사이드바 상단에 "세션 / 파일" 탭을 추가하고, 파일 트리 뷰를 별도로 두면 됨.
-- 파일 트리 데이터: `hub.ts`의 `/fs/contents` 가 `fsState` (root, projectFiles, absPaths)로 이미 제공 중 → **추가 API 없이 재사용 가능**.
+`GET /fs?path=<p>` → `browseDir()` (hub.ts:172, 라우트 hub.ts:695).
 
-### 1.6 폴더 피커 모달 (참고 — 사용하지 않음)
-- `#modal` (folder picker), `#fslist`, `#fsroots` 등의 모달이 존재.
-- 이번 작업에서는 **파일 트리 전환을 위해 이 모달을 재사용하지 않고** 좌측 사이드바 탭으로 구현.
+```ts
+// 반환 형태 (실제)
+{ path, display, home, roots, parent, dirs: [{ name, path, project }], error? }
+```
+
+| 이전 문서의 주장 | 실제 |
+|---|---|
+| `/fs/contents`endpoint 존재 | **없음.** `/fs` 하나뿐 |
+| `fsState`에 `projectFiles` / `absPaths` 존재 | **없음.** 위 반환값이 전부 |
+| 재사용 가능한 파일 트리 데이터 | **아님.** `dirs`는 `e.isDirectory()` 필터만 (hub.ts:189) → **파일이 하나도 안 나온다** |
+| `/fs/read` endpoint | **없음** |
+| `/fs/contents`는 읽기 전용이라 쓰기 API만 추가 | 읽기/쓰기 API **둘 다** 새로 만들어야 함 |
+
+**추가로 `/fs`는 "워크스페이스 열기" 폴더 픽커 전용이다.**
+- 홈/루트 전체를 탐색한다 (`home`, `roots`). **workspace 범위 제한이 없다.**
+- `.`으로 시작하는 항목만 숨긴다. **`.gitignore`를 적용하지 않는다** → `node_modules`는 `SKIP_DIRS`(hub.ts:170)로 제외될 뿐, `.venv`, `dist`, `target` 등은 그대로 노출된다.
+- `slice(0, 500)`으로 잘라버린다.
+
+→ **결론: 단계 1-A에서 `/fs/tree`를 새로 만든다. `/fs`는 손대지 않는다.**
+
+### 1.4 좌측 사이드바 실제 DOM (`page.ts` / `client.ts`)
+
+```
+#side
+├── .sidehdr          : .brand(로고) + #sidecollapse
+├── #openfolder       : "+ Open folder…" 버튼
+├── #wslist           : renderSidebar()가 그리는 유일한 리스트 컨테이너
+│   └── .ws (워크스페이스별 박스)
+│       ├── .wshdr    : .wsname + "+"(신규 세션) + "×"(워크스페이스 제거)
+│       └── .sessions : .sess 행들 (클릭=선택, 더블클릭=이름변경)
+└── .sidefoot         : #ver + #keys
+```
+
+- 이전 문서의 "`#sidedrawer` / `#sessions` / `#main` / `#sidefooter`" 중 **`#sidedrawer`, `#sessions`는 존재하지 않는다.** 실제 id는 `#wslist`이고 세션 목록은 `.sessions` 클래스다.
+- **"세션 / 파일" 탭 추가 위치:** `#openfolder` 바로 아래, `#wslist` 위에 탭 바를 넣고, `#wslist`를 숨기거나 대체한다. (기존 `#wslist` 렌더링 코드는 손대지 않고 `hidden` 토글만 권장.)
+- 접기/펼치기: `setSide()` (client.ts:864), `narrow()` = `matchMedia("(max-width: 1000px)")` (client.ts:869). 좁은 화면 동작을 확인할 것.
+
+### 1.5 우상단 panel 시스템 (`client.ts`)
+
+- DOM: `#top` 안의 `#btnbrowser` / `#btnterm` 버튼, `#panel > #panelgrip / #paneltabs / #panelviews` (page.ts).
+- 상태: 세션별 view 객체 `v` (`views` Map, client.ts:25). `v.tabs`(배열), `v.activeTab`, `v.panelOpen`, `panelWidth`(localStorage `smol.panel.w`, client.ts:634).
+- 렌더: `renderPanel()` (client.ts:653) — 탭 버튼 라벨/아이콘은 `t.kind === "browser" ? "◎" : ">_"` 로 **2분기로 되어 있어 `file` kind 추가 시 반드시 3분기 이상으로 바꿔야 한다**.
+- 탭 만들기: `openBrowserTab()` (client.ts:719) / `openTerminalTab()` (client.ts:844) 를 참고. 각각 `t.el` DOM을 만들어 `panelviews`에 붙인다.
+- 토글: `togglePanelKind(kind)` (client.ts:691) — kind별 "기존 탭 재사용 or 새로 열기" 분기. `file`은 다중 탭이 자연스럽다.
+- 닫기: `closeTab()` (client.ts:683) — `term`은 서버에 `/term/close`를 알리고, `browser`는 그냥 splice.
+- **저장/복원:** `savePanel()` (client.ts:636) 은 **`kind === "browser"` 탭만** localStorage에 저장한다. `loadPanelState()` (client.ts:639) 도 `browser`만 복원.
+  → `file` 탭을 복원하려면 **저장/복원 양쪽에 `file` 분기를 추가**해야 하며, 복원 시 파일이 이미 없었을 처리가 필요하다(§4 결정 3).
+
+### 1.6 세션 state에서 얻을 수 있는 값 (`session.ts` `state()`)
+
+클라이언트 `v.state` (= `state()` 반환, client.ts `renderState`가 소비):
+
+| 필드 | 용도 |
+|---|---|
+| `workspace` | **루트 경로.** 트리/파일 API의 기준. client.ts:589 `openDialog()`가 이미 `active.state.workspace`를 씀 |
+| `mode` | `"ro"` / `"edit"` / `"bypass"`. **`ro`에서 저장 금지** (§2) |
+| `model`, `backend`, `host` | 상태 표시 |
+| `commands` | 슬래시 명령 목록 |
+
+hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.workspace` (hub.ts:48), `Live.session` 가 있다.
+
+### 1.7 폴더 피커 모달 (`#modal`, client.ts:585~635)
+
+`browse()` → `GET /fs` → `renderFs()` → `openFolder()` → `POST /workspaces/add`.
+**재사용하지 않는다**(사전 §1.5 결정을 유지). 다만 `el()` 헬퍼와 `esc()` 등 UI 유틸은 재사용한다.
 
 ---
 
-## 2. 작업 단계 (체크리스트)
+## 2. 🔒 MUST 규칙 (안전 — skim하면 안 됨)
 
-### [x] **단계 1 — 로고 "SMOL" → "SMOL+" 변경** (난도: ★☆☆)
-- [x] `smol/src/logo.ts`의 `LOGO_ROWS` 6줄을 "SMOL+" 블록 글자로 교체 (또는 1줄 fallback)
-- [x] (선택) FAVICON "S" 글리프는 그대로 유지 — 로고 변경과 무관하므로 생략 (사용자 요청: 로고만 정확히 표시)
-- [x] 검증: `npx tsc`로 빌드 성공 (`npm run build`의 `clean` 스크립트 쉘-쿼팅 버그로 인해 직접 `tsc` 실행), dist/logo.js 가 "SMOL+"를 정확히 렌더링 (S M O L +, 6줄 × 49-char) — 테스트 없이 빌드 + 렌더링 확인
-- [x] 검증: `npm run build` + `npm test` 통과, 로고 렌더링 확인 (`S M O L +` 정확히 표시)
-- [x] 검증(2026-09-25): `test/branding.test.js` 수정 후 `npm run build && npm test` 통과 (154/154, branding 단독 6/6) — 상세는 §6 참고
-
-### [ ] **단계 2 — 좌측 사이드바에 파일 트리 탭 추가** (난도: ★★☆)
-- [ ] 사이드바 상단에 "세션 / 파일" 탭 전환 UI 추가
-- [ ] 파일 트리 뷰 구현: `hub.ts` `/fs/contents` (fsState) 재사용 → 폴더 구조 + 파일 목록 트리
-- [ ] `styles.ts`에 탭/트리 스타일 추가 (기존 CSS 클래스 활용)
-- [ ] `client.ts`에 탭 전환 로직 + 트리 렌더링 추가
-- [ ] 검증: 좌측 사이드바에서 세션/파일 탭 전환 → 파일 트리 표시
-
-### [ ] **단계 3 — 우상단 File Edit 패널 추가** (난도: ★★★)
-- [ ] 우상단 panel 버튼 영역에 "File Edit" 아이콘 버튼 추가
-- [ ] 파일 트리에서 파일 클릭 시 panel에 `file` kind tab 생성 (browser/term과 동일 패턴 확장)
-- [ ] panel body에 파일 내용 표시 (textarea 또는 에디터)
-- [ ] 저장: `hub.ts` 파일 쓰기 API 재사용 (없으면 추가)
-- [ ] `renderPanel()`에 `file` kind 처리 추가, close/tab 전환 로직 확장
-- [ ] 검증: 파일 클릭 → 우상단 File Edit 패널에 표시 → 편집 후 저장 → 파일 반영
+1. **모든 파일 접근은 세션 workspace 안으로 제한한다.**
+   `src/sandbox.ts:36`의 `resolveInWorkspace(root, userPath)` 를 **재사용**하라. 심볼릭 링크 탈출을 realpath로 막아준다(`SandboxError` 던짐). 새로 `path.resolve`만 쓰지 말 것.
+2. **`mode === "ro"` 세션에서는 저장을 막는다.** `v.state.mode === "ro"`면 저장 버튼 비활성 + 서버도 거부.
+3. **GET 라우트에는 세션 컨텍스트가 없다.** `GET /fs`는 `sid`를 받지 않으므로 어떤 workspace 기준인지 알 수 없다.
+   → 새 API는 **`?sid=<sid>&k=<token>`** 을 받아 hub가 `this.live.get(sid).workspace` 를 기준으로 검증한다. 검증 실패는 403/400.
+4. **저장은 atomic하게.** `store.ts`의 `writeAtomic()` (store.ts:25) 패턴 — 임시 파일에 쓰고 `fs.renameSync`. 편집 중 Interrupted로 파일이 깨지지 않도록.
+5. **임시/숨김 항목은 기본 제외.** `.git`, `node_modules`, `.DS_Store`, `dist`, `.venv`, `__pycache__` 등. 가능하면 `.gitignore`를 단순 파싱해 적용하되, 파싱에 실패해도 무시하고 계속 진행한다(로컬 앱이므로 규칙이 빡빡해지면 안 됨).
+6. **패널 전체화면 중에는 에이전트 승인을 절대 숨기지 않는다.** 전체화면은 `#main`(챗) 전체를 감추므로, 승인 요청이 도착하면 **자동으로 전체화면을 해제**한다(§3 단계 1-C).
 
 ---
 
-## 3. 성공/실패 기준 (검증용)
+## 3. 작업 단계 (체크리스트)
+
+### [x] **단계 0 — groundwork**
+- [x] `npm run build && npm test` 통과 확인 (baseline 154/154)
+- [x] `docs/` 문서에 `/fs` 실체 정정 반영 완료 (본 문서가 그 결과)
+- [x] **client bundle 구문 검사 테스트 추가 (2026-09-26 완료)** — 아래 §0.1 참조. 이후 모든 client.ts 작업의 안전망
+
+### [ ] **단계 1-A — 서버: 파일 트리 API** (난도 ★★☆)
+- [ ] `hub.ts`에 `export function listTree(root, rel, depth)` 순수 함수 작성 (테스트 가능하게 hub 클래스 밖으로)
+  - 반환: `{ path, rel, dirs: [{name, rel, children?}], files: [{name, rel, size}] }` — 디렉터리/파일을 분리
+  - `depth`로 lazy 로딩 (기본 1). 전체 재귀 한 번에 금지(대용량 repo에서 멈춤)
+  - 개수 상한(dirs 500 / files 2000), 심볼릭 링크는 workspace 밖이면 건너뜀
+- [ ] `hub.ts:695` GET switch에 `case "/fs/tree":` 추가 — `sid`로 `Live.workspace` lookup 후 `resolveInWorkspace` 검증
+- [ ] `test/web.test.js`에 `listTree` 단위 테스트 추가 (§5)
+- [ ] 검증: `curl "http://127.0.0.1:7433/fs/tree?sid=<sid>&k=<token>"` → JSON 확인
+
+### [ ] **단계 1-B — 클라이언트: 사이드바 탭 + 트리** (난도 ★★☆)
+- [ ] `page.ts`: `#openfolder` 아래에 `#sidetabs`(세션/파일) + `#fstree` 컨테이너 추가, `#wslist`는 기본 표시
+- [ ] `styles.ts`: 탭 바 + 트리(들여쓰기, 파일/디렉터리 구분, chevron) 스타일 추가
+- [ ] `client.ts`: 탭 전환 함수. localStorage `smol.side.tab` 저장 (`ls.get/set` 사용, client.ts:14)
+- [ ] `client.ts`: `loadTree(sid, rel, depth)` → 지연 렌더. 디렉터리 클릭 → 그 디렉터리 `children` 요청 후 펼침
+- [ ] `client.ts`: **MVP — 파일 클릭 시 composer에 상대경로 삽입**
+  - `input.value += (input.value && !input.endsWith(" ") ? " " : "") + rel` 후 `autoGrow()` (client.ts:907) + 포커스
+  - 이게 1단계의 최종 수익. 서버 추가 작업 0줄
+- [ ] 좁은 화면(`narrow()`)에서 탭·트리 동작 확인
+- [ ] 검증: 사이드바 탭 전환 → 트리 표시 → 파일 클릭 → 입력창에 경로 → Enter로 에이전트에게 전달
+
+### [ ] **단계 1-C — 패널 전체화면 토글 + 폭 정합성** (난도 ★☆☆)
+> 파일 트리/에디터가 "좁다"는 불편이 가장 먼저 해결되는 항목. 2-B보다 먼저 구현한다.
+
+- [ ] **폭 상한 불일치 수정 (기존 버그)**
+  - `client.ts:857` 드래그 중 상한은 `innerWidth * 0.8`, `client.ts:663` `renderPanel()`은 `innerWidth * 0.6` → **60%를 넘겨 드래그하면 마우스를 놓는 순간 패널이 확 줄어든다**
+  - 두 상한을 **0.8로 통일** (챗이 20%까지 압축될 수 있으므로 전체화면 토글과 세트로 의미가 있다). 또는 0.6으로 낮춰 일치시켜도 된다 — **하나로 통일하는 것 자체가 목표**
+- [ ] `styles.ts`에 전체화면 스타일 추가
+  ```css
+  body.panel-full #main        { display: none; }
+  body.panel-full #panel       { flex: 1 1 auto; width: auto !important; max-width: none; }
+  body.panel-full #panelgrip   { display: none; }  /* 전체화면 중에는 드래그 불가 */
+  ```
+  - `!important`가 필요한 이유: `client.ts:663`이 inline `style.width`를 박기 때문. `styles.ts:329`의 좁은 화면 오버레이 규칙(`width: 100% !important`)가 같은 이유로 이미 이 패턴을 쓴다 — **그 precedent를 그대로 따라간다**
+  - 사이드바(`#side`, `flex: none`)는 남아 있으므로 "좌측 사이드바를 제외한 전체화면"이 된다
+- [ ] `client.ts` `renderPanel()` 안에서 `document.body.classList.toggle("panel-full", !!v.panelFull)`
+  - `renderPanel()`은 세션 전환·탭 전환마다 이미 호출되므로 여기에 넣으면 별도 호출 sites가 필요 없다
+- [ ] 토글 버튼: `#paneltabs`의 `+◎` / `+>_` / `»` 버튼 옆(`client.ts:678-682`)에 `⤢` 아이콘 버튼 추가
+- [ ] 상태 영속화: `v.panelFull`(세션별) → `savePanel()`(client.ts:636) JSON에 `full: v.panelFull` 추가, `loadPanelState()`(client.ts:639)에서 복원
+- [ ] 🔴 **승인 요청 시 자동 해제 (MUST)**
+  - 에이전트 승인 박스는 `#logs` 안에 렌더된다(`client.ts:435-438`). 전체화면이면 안 보여서 **에이전트가 멈춘 것처럼 보인다**
+  - `phase === "waiting"` 전환을 감지해 `v.panelFull = false` + `renderPanel()` 호출 + 배지로 알림
+  - (`renderState()`가 이미 `phase`를 소비하므로 기존 흐름에 끼워 넣을 수 있다)
+- [ ] 단축키: `Ctrl+Shift+E` (기존 `Ctrl+B` 사이드바 / ``Ctrl+` `` 터미널 패턴, `client.ts:989-994`) + `#keys` 다이얼로그 목록(`client.ts:985`)에 한 줄 추가
+- [ ] 좁은 화면(`narrow()`, client.ts:869)에서는 토글 버튼 숨김 — 이미 `styles.ts:329` 오버레이로 전체화면이므로 중복
+- [ ] 전체화면 ↔ 일반 전환 시 이전 폭이 정확히 복원되는지 확인 (toggle이 inline width를 지우면 CSS 기본 520px로 돌아가므로, 복귀 시 `renderPanel()`이 clamp를 다시 적용하게 둔다)
+- [ ] 검증: `⤢` 클릭 → 좌측 사이드바만 남고 패널이 전체 폭 → 드래그 grip 사라짐 → `Esc`/토글로 복귀 + 폭 유지 → 에이전트 승인 요청이 오면 자동 복귀
+
+### [ ] **단계 2-A — 서버: 파일 읽기/쓰기 API** (난도 ★★☆)
+- [ ] `GET /fs/file?path=<rel>&sid=<sid>&k=<token>` → `{ rel, mtimeMs, size, binary, content }`
+  - `binary`(이미지/binary)는 `content`를 주지 않고 `binary: true`만 (클라이언트에서 "이진 파일은 미리보기가 없습니다" 표시)
+  - 크기 상한 512KB 초과 시 잘라서 반환 + `truncated: true`
+- [ ] `POST /fs/file` body `{ sid, path, content, mtimeMs? }`
+  - `resolveInWorkspace` 검증, `mode === "ro"`면 403
+  - **`mtimeMs`가 실disk와 다르면 409 반환** (다른 곳에서 바뀐 파일 덮어쓰기 방지, §4 결정 2)
+  - `writeAtomic` 로 저장
+- [ ] `test/web.test.js`에 읽기/쓰기 테스트 (경로 탈출 `../`, ro 모드 거부, atomic 후 내용 일치) 추가
+- [ ] 검증: curl로 읽기/쓰기, `../` 탈출 시도 → 403
+
+### [ ] **단계 2-B — 클라이언트: File Edit 패널** (난도 ★★★)
+- [ ] `page.ts`: `#top`에 `#btnfiles` 버튼 추가 (ICON inline — `ICON_BROWSER`/`ICON_TERMINAL` 스타일, page.ts:13~15)
+- [ ] `client.ts` `openFileTab(v, rel)`: `GET /fs/file` → `panelviews`에 textarea 붙인 tab 생성. `t.el`, `t.rel`, `t.mtimeMs` 보관
+- [ ] `renderPanel()` (client.ts:653)의 아이콘/라벨 2분기를 3분기로 확장 (`file` → "📄" + 파일명)
+- [ ] `togglePanelKind("file")` 분기 추가 — 기존 file 탭 중 마지막 것 재사용 or 새로 열기
+- [ ] `closeTab()` (client.ts:683): `file` 탭은 "저장 안 한 변경 있음?" confirm 후 닫기
+- [ ] 저장 버튼/`cmd+s`: `POST /fs/file`. 409 응답 시 "파일이 변경되었습니다" 확인 후 새로고침/강제 덮어쓰기
+- [ ] `savePanel()`/`loadPanelState()` (client.ts:636/639)에 `file` 분기 추가
+  - 복원 시 `GET /fs/file` 재요청, 404면 "삭제된 파일" 탭으로 표시 후 닫기 버튼만 남기기
+- [ ] 패널 폭 제한 유지 (renderPanel이 이미 `Math.min(panelWidth, window.innerWidth * 0.6)` 적용)
+- [ ] 검증: 파일 클릭 → 패널에 열림 → 편집 → 저장 → 실제 파일 반영 → 파일 목록(에이전트 read_file)에도 반영
+
+---
+
+## 4. 설계 결정 (구현 전에 선택 필요 — 위 기본안 권장)
+
+| # | 결정 | 권장안 | 상태 |
+|---|---|---|---|
+| 1 | 트리 표시 정책 | `.gitignore` 단순 파싱(없으면 규칙 무시하고 계속) + `.git`/`node_modules`/`.DS_Store`/숨김 파일 제외. 디렉터리/파일 개수 상한 | 미결 |
+| 2 | 저장 충돌 | 저장 전 mtime 비교, 불일치 시 409 + UI 확인 후 진행 | 미결 |
+| 3 | `file` 탭 복원 | localStorage에 `{kind:"file", rel}` 저장. 복원 시 GET 재요청, 없으면 "삭제됨" 탭 | 미결 |
+| 4 | 모드 정책 | `ro` 세션: 트리는 보이지만 편집/저장 불가(읽기 전용 뷰). `edit`/`bypass`: 저장 가능 | 미결 |
+| 5 | 큰/이진 파일 | 512KB 초과 잘라서 표시 + "전체 보기" 없음(이진은 미리보기 불가) | 미결 |
+| 6 | 패널 폭 상한 | 드래그(0.8)와 `renderPanel`(0.6) 중 하나로 통일. **0.8 통일 + 전체화면 토글 제공** 권장 (챗이 좁아지는 것은 전체화면으로 해소) | 미결 |
+
+---
+
+## 5. 성공/실패 기준
 
 | 항목 | ✅ 성공 조건 |
 |------|------------|
-| 로고 | ✅ 좌상단 로고가 "SMOL+"로 표시 (FAVICON 변경 시 일치) |
-| 파일 트리 | ✅ 좌측 사이드바에서 세션/파일 탭 전환 → 프로젝트 파일 트리 표시 |
-| 파일 편집 | ✅ 파일 클릭 → 우상단 File Edit 패널에 표시, 편집 후 저장 시 실제 파일 반영 |
-| 기존 기능 | ✅ browser/terminal panel, 세션 목록, 폴더 피커 모달 기존 동작 유지 |
-| 제약 | ✅ client.ts에서 backtick 미사용 (또는 `\`` escape) |
+| 트리 API | `GET /fs/tree`가 workspace 상대경로로 dir/file 구분 목록을 반환, `../` 탈출 차단 |
+| 트리 UI | 사이드바 세션/파일 탭 전환 동작, 지연 로딩, 좁은 화면에서 깨지지 않음 |
+| MVP | 파일 클릭 → composer에 경로 삽입 → Enter 전송 → 에이전트가 그 파일을 읽음 |
+| 파일 읽기/쓰기 | ro 세션 저장 불가, 경로 탈출 불가, 저장 후 실제 파일 반영, 충돌 시 409 |
+| File Edit 패널 | 클릭→패널, 편집→저장→반영, 미저장 상태 닫기 confirm, 패널 폭/탭 전환 정상 |
+| 패널 전체화면 | `⤢` 토글 → 사이드바만 남고 패널이 전체 폭, grip 사라짐, `Ctrl+Shift+E`, 새로고침 후에도 유지, **승인 요청 시 자동 해제** |
+| 폭 정합성 | 60% 초과 드래그 후 놓아도 폭이 되돌아가지 않음 (기존 버그 수정) |
+| 회귀 | `npm test` 통과, browser/terminal panel·세션 목록·폴더 피커·첨부 기능 동작 유지 |
+| 제약 | client.ts에 리터럴 백틱 없음, 모든 요청에 `?k=` 포함, 모드/경로 검증 통과 |
+| 테스트 | `listTree` + 파일 read/write에 `test/web.test.js` 테스트 추가 |
+| 안전망 | `client.ts` 작업 후 `npm test` 통과 (구문 검사 2개가 tsc 몫을 대신 잡아준다, §0.1) |
 
 ---
 
-## 4. 예상될 수 있는 이슈 및 대체책
+## 6. 예상 이슈 및 대체책
 
-- **block art 문자열 제작** — "SMOL+" 5글자 block art를 6줄로 만들 때 각 줄 길이가 LOGO_WIDTH(=49)에 맞춰야 UI 깨짐 방지.
-- **큰 파일 처리** — 파일이 크면 textarea 대신 스크롤 또는 페이지네이션 필요.
-- **저장 API 부재** — `/fs/contents`가 읽기 전용이므로, 파일 저장용 POST API를 `hub.ts`에 추가 필요.
-- **backtick 실수** — client.ts에서 리터럴 백틱을 쓰면 빌드/런타임 에러 → `\`` 로 반드시 escape.
-
----
-
-## 5. 빠른 참고 링크
-
-- 로고: `smol/src/logo.ts` (`LOGO_ROWS`, `LOGO_TEXT`)
-- 페이지/로고 주입: `smol/src/web/page.ts` (LogoText, FAVICON)
-- 클라이언트 JS: `smol/src/web/client.ts` (panel, side drawer, fsState)
-- 서버 API: `smol/src/web/hub.ts` (`/fs/contents`, fsState, 파일 쓰기)
-- 스타일: `smol/src/web/styles.ts` (#side, #panel, #paneltabs, .tab)
+- **대용량 repo에서 트리가 느리거나 멈춤** → depth=1 지연 로딩 + 개수 상한 필수. 전체 재귀 금지.
+- **`.gitignore` 파싱 실수** → 실패해도 무시하고 진행. 이 앱은 로컬 전용이라 엄격한 무시 규칙 불필요.
+- **에이전트와 동시에 같은 파일 수정** → §4 결정 2(mtime 409). 이것이 없으면 사용자의 편집이 에이전트 작업으로 덮어써져 분노만 커진다.
+- **화면 좁을 때 트리가 챗을 좁힘** → `narrow()` 분기에서 기본적으로 파일 탭을 닫은 상태로 시작.
+- **전체화면 중 승인 요청이 안 보임** → 에이전트가 멈춘 것처럼 보이는 최악의 UX. **자동 해제 MUST** (단계 1-C).
+- **전체화면 상태가 세션 전환 후에도 남음** → `v.panelFull`은 세션별이므로 `renderPanel()` 안에서 body class를 갱신하면 자연히 따라간다. localStorage에 값이 없으면 `false`로 시작.
+- **backtick 실수** → client.ts에서 리터럴 백틱 금지, `` \` `` escape (기존 §1.2 제약 그대로 유효).
+- **`panelviews` DOM 누수** → `closeTab()`에서 `t.el.remove()` 호출 확인 (browser 경로가 이미 하고 있음).
+- **writeBody가 escape 안 된 innerHTML로 들어가는지** → 파일 내용을 `el("textarea")`에 `textContent`으로만 넣을 것 (`el()`은 text만 설정, client.ts:31).
 
 ---
 
-## 6. 2026-09-25 작업 — SMOL+ 로고 테스트 수정 (branding 실패 해소)
+## 7. 테스트 규칙
 
-### 6.1 증상
-- `npm test`에서 branding 테스트 실패 (재현 시점: `logo rows spell SMOL+ ... row width differs: 42 !== 41` 1건, 디자인·폭 불일치로 인한 latent 실패 2건).
-
-### 6.2 실패 원인
-1. **plus 검증 스펙 불일치 (`plusCol=31`):** 구 테스트는 폭을 거의 안 늘리고 L 칸 안쪽에 3행짜리 작은 `+`(0-1행 blank, 2-4행만)를 가정. 31은 `S8+공백1+M11+공백1+O9+공백1 = 31` 즉 L 시작점이라 L 픽셀 때문에 통과 불가. 실제 디자인은 6행 전체 높이 `+`라 스펙 자체가 다름.
-2. **45열 임계값 이슈:** 로고 폭 39→49열로 증가. `terminalLogo(45)`는 아트 표시 조건 `1+49=50`을 못 채워 폴백하는데 테스트는 아트를 기대함.
-3. **소스 불량:** `src/logo.ts` 행 폭이 41/42/47/46으로 불일치, `██████╗ ██║` 잔재 + `╗→║` 오타 존재.
-
-### 6.3 조치 (소스 디자인은 유지, 테스트를 실제 디자인에 맞춤 + 오타 수정)
-- `src/logo.ts:8-15` — 6행 모두 49열로 통일, 전체 높이 `+` 글리프로 교체:
-  - row 0-1/4-5: 수직 스템 (`██╗` / `██║` / `╚═╝`)
-  - row 2-3: 수평바 (`╔══██╚══╗` / `╚══██╔══╝`)
-- `test/branding.test.js:17-23` — `plusCol 31→40`, 6행 스템 + 2-3행 수평바 검증으로 변경.
-- `test/branding.test.js:33` — `terminalLogo(45→55)`. 50열 이상에서 아트 표시, tail은 별도 줄.
-- narrow 케이스(`30열`)의 `assert.equal(lines.length, 1)` 엄격 검증 유지.
-- 반드시 `npm run build`를 먼저 실행해 `dist/logo.js` 갱신 후 테스트.
-
-### 6.4 검증
-- `npm run build && npm test` → tests 154 / pass 154 / fail 0.
-- `node --test test/branding.test.js` → 6/6 통과.
-
-### 6.5 참고 — 제안 base64 패치와의 차이 2건
-- 제안 `logo.ts` payload는 `/**` 여는 주석이 빠져 있어 그대로 적용 시 주석 깨짐 → 기존 정상 주석 유지하고 `LOGO_ROWS`만 교체.
-- 제안 테스트 payload는 narrow 케이스를 `assert.equal`에서 `assert.ok(lines.length, 1)`로 약화 → 엄격한 `assert.equal` 유지.
+- 이 repo는 `node:test` + `scripts/test.cjs` 러너를 쓴다 (`npm test` = `npm run build && node scripts/test.cjs`).
+- **hub 서버 함수는 클래스 밖 순수 함수로 빼서** `test/web.test.js`에서 직접 테스트한다. HTTP를 띄우지 않는다.
+- 기존 `test/web.test.js` (465줄)는 `SessionChannel` 위주. 여기에 `listTree` + 파일 read/write 테스트를 append.
+- `npm run build`를 먼저 돌려 `dist/`를 갱신한 뒤 `npm test` (테스트는 `dist/`를 요구).
+- **`client.ts`를 건드린 작업은 `npm test` 통과가 완료 조건이다.** `tsc`는 CLIENT_JS 내부를 검사하지 못하므로(§0.1) 이 테스트가 유일한 안전망이다.
+- `page.ts`에 요소를 추가했다면 두 번째 테스트(id 존재 확인)가 자동으로 통과 여부를 알려 준다 — 별도로 확인할 필요 없다.
 
 ---
 
-## 7. 2026-09-25 작업 — `+` 수평바 다듬기 (2줄 솔리드 → 1줄+그림자)
+## 8. 빠른 참고 링크
 
-### 7.1 배경
-- `docs/smolp_logo.png` 기준 로고와 비교 시 `+` 수평바가 속 빈 외곽선(`╔══██╚══╗` / `╚══██╔══╝`)으로 보여 1차로 2줄 솔리드로 채움.
-- 2줄 솔리드는 높이가 너무 두꺼워 보여 2차로 다듬음 (사용자 확인 완료).
-
-### 7.2 조치 (`src/logo.ts` 2행만 교체, 전체 폭 49 유지)
-- row 2: `... ██║     ██████████` — 수평바 1줄 솔리드 (수직 스템 `██` 2칸 너비와 같은 굵기).
-- row 3: `... ██║     ╚═══██═══╝` — 수평바 아래에 다른 글자 밑면처럼 겹선 그림자, 가운데로 수직 스템 `██` 통과.
-- 터미널·웹UI 공통 소스라 한 곳만 고치면 둘 다 반영. `test/branding.test.js` 변경 없음 (기존 plus 검증 그대로 통과).
-
-### 7.3 검증
-- `npm test` → tests 154 / pass 154 / fail 0.
+- 라우팅(GET): `src/web/hub.ts:684-705` / (POST): `src/web/hub.ts:874+`
+- 인증: `src/web/hub.ts:673` (`?k=` 토큰 + same-origin)
+- 세션 맵: `src/web/hub.ts:231` (`this.live`), `Live` 정의 `hub.ts:46`
+- 기존 fs API: `src/web/hub.ts:172` (`browseDir`)
+- atomic 쓰기 참고: `src/web/store.ts:25` (`writeAtomic`)
+- 경로 검증(재사용): `src/sandbox.ts:36` (`resolveInWorkspace`)
+- 세션 state: `src/session.ts:396` (`state()` — `workspace`, `mode`, …)
+- 사이드바 렌더: `src/web/client.ts:504` (`renderSidebar`)
+- panel 시스템: `src/web/client.ts:634-712`
+- composer 입력: `src/web/client.ts:893` (`submit`), `client.ts:907` (`autoGrow`)
+- DOM 구조: `src/web/page.ts:24-88`
+- 패널 리사이즈 grip: `src/web/client.ts:854-860`, `src/web/styles.ts:175-176`
+- 패널 폭 clamp(정합성 대상): `src/web/client.ts:663` (0.6) vs `client.ts:857` (0.8)
+- 전체화면 precedent: `src/web/styles.ts:329` (좁은 화면 `#panel` absolute 오버레이)
+- 단축키 핸들러: `src/web/client.ts:989-994`, `#keys` 목록 `client.ts:985`
+- 스타일: `src/web/styles.ts` (`#side`, `#wslist`, `#panel`, `.ptab`)
 
 ---
 
-*검토 및 구현 완료: 단계 1(로고 "SMOL" → "SMOL+") 구현·적용 완료 (`S M O L +` 정확히 표시, `npx tsc`로 빌드 성공, dist/logo.js 렌더링 확인). 단계 2·3은 미개시.*
+*단계 0~2-B 모두 미개시. 1-C(전체화면)는 난도 ★☆☆로 가장 빠르게 체감되고, 1-B 완료 시점(트리 + 경로 삽입)이 첫 번째 기능 완성 지점이다.*
