@@ -193,9 +193,13 @@ const NOT_LOADED_NOTE =
 const LMSTUDIO_JIT_GUESS = 4096; // LM Studio's usual default when a model is JIT-loaded
 const DEFAULT_LMSTUDIO_BASE = `http://127.0.0.1:${LMSTUDIO_PORT}`;
 
-/** LM Studio labels vision models "vlm" and text-only ones "llm". */
-function visionOf(type: unknown): boolean | undefined {
-  return type === "vlm" ? true : type === "llm" ? false : undefined;
+/** Whether a model takes image input. Bionic 1.1.x reports this in
+ * capabilities.vision and labels EVERY model "llm" — reading `type` alone
+ * marks a vision model as text-only and silently strips its images. Older
+ * builds used type "vlm"/"llm", so keep that as the fallback. */
+function visionOf(m: any): boolean | undefined {
+  if (typeof m?.capabilities?.vision === "boolean") return m.capabilities.vision;
+  return m?.type === "vlm" ? true : m?.type === "llm" ? false : undefined;
 }
 
 function parseOllamaTags(data: any, base: string): DetectedModel[] | null {
@@ -232,7 +236,7 @@ export function parseLmStudioV1(data: any, base = DEFAULT_LMSTUDIO_BASE): Detect
         maxContext: max,
         loaded,
         reasoning,
-        vision: visionOf(m.type),
+        vision: visionOf(m),
         note: loaded && loadedCtx ? undefined : NOT_LOADED_NOTE,
       };
     });
@@ -262,7 +266,7 @@ function parseLmStudioV0(data: any, base: string): DetectedModel[] | null {
         contextWindow,
         maxContext: max,
         loaded,
-        vision: visionOf(m.type),
+        vision: visionOf(m),
         note,
       };
     });

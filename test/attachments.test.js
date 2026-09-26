@@ -90,8 +90,22 @@ test("context gauge counts images and lm studio listings report vision", () => {
   const base = m.estimateMessages([{ role: "user", content: "x" }]);
   const withImg = m.estimateMessages([{ role: "user", content: "x", images: [{ path: "p", mime: "image/png", name: "n" }] }]);
   assert.equal(withImg - base, IMAGE_TOKENS);
-  const models = parseLmStudioV1({ models: [{ key: "a", type: "vlm" }, { key: "b", type: "llm" }, { key: "c" }] });
-  assert.deepEqual(models.map((x) => x.vision), [true, false, undefined]);
+  // Bionic 1.1.x shape: every model is type "llm"; vision lives in capabilities.
+  const models = parseLmStudioV1({
+    models: [
+      { key: "qwen3-vl-8b-instruct", type: "llm", architecture: "qwen3vl", capabilities: { vision: true } },
+      { key: "gemma-4-12b-it-mlx", type: "llm", architecture: "gemma4_unified", capabilities: { vision: true } },
+      { key: "qwen3.8-27b", type: "llm", architecture: "qwen35", capabilities: { vision: false } },
+      { key: "no-caps", type: "llm" },
+    ],
+  });
+  assert.deepEqual(models.map((x) => x.vision), [true, true, false, false]);
+  // Older builds labelled vision models "vlm"; that signal still counts.
+  const legacy = parseLmStudioV1({ models: [{ key: "a", type: "vlm" }, { key: "b", type: "llm" }, { key: "c" }] });
+  assert.deepEqual(legacy.map((x) => x.vision), [true, false, undefined]);
+  // capabilities.vision wins over the stale type field.
+  const mixed = parseLmStudioV1({ models: [{ key: "d", type: "llm", capabilities: { vision: true } }] });
+  assert.deepEqual(mixed.map((x) => x.vision), [true]);
 });
 
 test("agent: a turn with attachments sends the file text and the images to the provider", async (t) => {
