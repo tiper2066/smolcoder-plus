@@ -48,6 +48,51 @@ harness sends and from load settings:
   them anyway); only the current turn's traces travel with the tool loop. On a
   thinking model this is the largest single prompt-size saving.
 
+## Fork-specific: LM Studio moved the vision signal out of `type` (fixed in 1.0.6)
+
+LM Studio used to label a vision model `"type": "vlm"` in `/api/v1/models` and
+everything else `"llm"`. As of **Bionic 1.1.x every model is `"type": "llm"`** and
+image support moved to a separate field (verified 2026-09-26 on Bionic 1.1.6,
+llama.cpp 2.46.0, macOS arm64):
+
+```json
+{ "type": "llm", "key": "qwen3-vl-8b-instruct", "architecture": "qwen3vl",
+  "capabilities": { "vision": true, "trained_for_tool_use": true } }
+```
+
+smolcoder read `type` alone, so every vision model was recorded as text-only and
+`visionOf` returned `false`. **The failure was silent by design of our own gate:**
+`agent.ts` renders attachments with `this.provider.vision !== false`, so a wrong
+`false` does not error — it swaps the image for the note
+`[Attached image: … this model cannot view images …]`, `toWire` then never builds
+an `image_url` part, and the model answers that it cannot see images. The web hub
+does show a `cannot see images` chip on the attachment, which is the only visible
+symptom. Nothing is wrong with the backend: the same `mmproj` loads and answers
+image requests correctly over plain `curl`.
+
+`visionOf` in `src/detect.ts` now reads `capabilities.vision` first and keeps
+`type: "vlm"` only as a fallback for older servers, so both API generations work.
+Regression test: `test/attachments.test.js` ("context gauge counts images and lm
+studio listings report vision") feeds the real Bionic response shape — the old
+fixture asserted on `type: "vlm"`, which is why the change slipped through.
+
+End-to-end check of the real attach flow (same `POST /upload` + `POST /msg` the
+attach button issues, image = a JPEG reading `LM STUDIO VISION TEST / CODE: 7391`):
+
+| build | upload response | model reply |
+|---|---|---|
+| 1.0.5 (pre-fix) | `warning: qwen3-vl-8b-instruct cannot see images` | refused: "시각 기능을 갖춘 모델로 전환해야 합니다" |
+| 1.0.6 | no warning | `LM STUDIO VISION TEST` / `CODE: 7391` (5.3 s, 15 tok) |
+
+Confirmed on both `qwen3-vl-8b-instruct` and `gemma-4-12b-it-mlx`.
+
+**When a backend API moves a field, re-read it before trusting our parser.** The
+cheap check is `curl -s http://127.0.0.1:1234/api/v1/models | head -40`; a model
+we believe is vision-capable showing `vision: false` (or a text model showing
+`true`) is a parser bug, not a backend bug. Vision detection also silently
+governs the attachment path, `web/hub.ts`'s warning chip and the context gauge
+(`IMAGE_TOKENS` per image), so all three move together.
+
 ## End-to-end: the same Minecraft build on both backends
 
 One headless run each (`smol -p "<prompt>" --mode bypass --effort off`), same
