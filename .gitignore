@@ -4,3 +4,4 @@ dist/
 playground/
 .claude/
 .scratch/
+.DS_Store
