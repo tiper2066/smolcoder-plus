@@ -73,6 +73,34 @@ export const STYLES = String.raw`
   .sess:hover .iconbtn { visibility: visible; }
   .sidefoot { padding: 8px 14px; font-size: 11.5px; color: var(--gray); border-top: 1px solid var(--line); display: flex; gap: 10px; }
 
+  /* Tabs at the top of the sidebar: sessions list or workspace file tree. */
+  .side-tabs { display: flex; gap: 4px; padding: 0 10px 8px; }
+  .side-tab { background: transparent; border: 1px solid transparent; color: var(--dim); font-size: 12.5px; padding: 3px 10px; border-radius: 4px; cursor: pointer; }
+  .side-tab:hover { color: var(--fg); background: #141a1d; }
+  .side-tab.on { color: var(--accent); border-color: var(--line); background: #13202a; }
+  .side-panel { flex: 1; min-height: 0; overflow-y: auto; padding: 0 6px 10px; }
+  /* Only the active tab's panel is in the layout — without this both are
+     flex:1 and the tree ends up stacked under the session list. */
+  .side-panel:not(.on) { display: none; }
+
+  /* Workspace file tree (Files tab). */
+  #fshdr { display: flex; align-items: center; gap: 8px; padding: 2px 6px 8px 10px; font-size: 12px; color: var(--dim); }
+  #fshdr .hint { margin-left: auto; }
+  /* The two header controls are the only way to refresh or open the whole
+     tree, so they are sized to be comfortably clickable, not decorative. */
+  .fsbtn { cursor: pointer; color: var(--gray); user-select: none; font-size: 20px; line-height: 1; padding: 2px 6px; border-radius: 4px; }
+  .fsbtn:hover { color: var(--fg); background: #141a1d; }
+  .fstree { font-size: 13px; }
+  /* Each directory nests a .tree-body holding its own rows, so the indent
+     comes from the nesting rather than from per-row padding math. */
+  .tree-body { padding-left: 12px; }
+  .tree-empty { padding: 6px 10px; color: var(--gray); font-size: 12px; }
+  .tri { display: flex; align-items: center; gap: 6px; padding: 2.5px 4px 2.5px 8px; border-radius: 4px; cursor: pointer; color: var(--dim); white-space: nowrap; overflow: hidden; }
+  .tri:hover { background: #141a1d; color: var(--fg); }
+  .tri .arrow { width: 14px; flex: none; text-align: center; color: var(--gray); font-size: 13px; }
+  .tri .fname { overflow: hidden; text-overflow: ellipsis; }
+  .tri.dir > .fname { color: var(--fg); font-weight: 600; }
+
   /* ---- main column ---- */
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
   #top { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--dim); min-height: 40px; }
@@ -177,6 +205,9 @@ export const STYLES = String.raw`
   body.dragging { cursor: col-resize; user-select: none; }
   body.dragging iframe { pointer-events: none; }
   #paneltabs { display: flex; align-items: center; gap: 2px; padding: 5px 6px; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; min-height: 40px; }
+  #panelfull { background: transparent; border: 1px solid transparent; color: var(--dim); cursor: pointer; border-radius: 4px; padding: 2px 6px; line-height: 1.2; }
+  #panelfull:hover { color: var(--fg); border-color: var(--line); background: #1a2023; }
+  #panelfull.on { color: var(--accent); border-color: var(--line); background: #13202a; }
   .ptab { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; border-radius: 4px; color: var(--dim); cursor: pointer; font-size: 12px; white-space: nowrap; max-width: 210px; border: 1px solid transparent; }
   .ptab:hover { color: var(--fg); background: #141a1d; }
   .ptab.on { color: #eef3f5; background: #17232a; border-color: var(--line); }
@@ -330,4 +361,7 @@ export const STYLES = String.raw`
     .modelpick { max-width: 150px; }
     .wshdr .iconbtn, .sess .iconbtn { visibility: visible; }
   }
+  /* full-width panel: spans full height of the main area, below #top */
+  body.panel-full #panel { position: absolute; inset: 48px 0 0; width: var(--fw-panel, 60%); min-width: 420px; max-width: 85%; border-left: 1px solid var(--line); background: var(--si); z-index: 15; }
+  body.panel-full #main:not(.dragging) #inputbox { min-height: 60px; }
 `;

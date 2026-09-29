@@ -34,7 +34,15 @@ export const PAGE_HTML = `<!doctype html>
     <button class="iconbtn" id="sidecollapse" title="hide sidebar (ctrl+b)">«</button>
   </div>
   <button id="openfolder" class="ghost">+ Open folder…</button>
-  <div id="wslist"></div>
+  <nav class="side-tabs">
+    <button class="side-tab on" data-tab="sessions">Sessions</button>
+    <button class="side-tab" data-tab="tree">Files</button>
+  </nav>
+  <div id="sessions-panel" class="side-panel on"><div id="wslist"></div></div>
+  <div id="tree-panel" class="side-panel">
+    <div id="fshdr"><span id="fslabel">Files</span><span class="grow"></span><span id="fsreload" class="fsbtn" title="reload the tree">⟳</span><span id="fsexpandall" class="fsbtn" title="expand all">▸</span></div>
+    <div id="fstree" class="fstree"></div>
+  </div>
   <div class="sidefoot"><span id="ver"></span><span class="grow"></span><button class="iconbtn" id="keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button></div>
 </aside>
 <div id="main">
@@ -72,7 +80,7 @@ export const PAGE_HTML = `<!doctype html>
 </div>
 <div id="panel" hidden>
   <div id="panelgrip" title="drag to resize"></div>
-  <div id="paneltabs"></div>
+  <div id="paneltabs"><button class="iconbtn" id="panelfull" title="toggle full-width panel (ctrl+shift+b)">⛶</button></div>
   <div id="panelviews"></div>
 </div>
 <div id="modal" hidden>

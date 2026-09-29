@@ -157,7 +157,7 @@ function getView(sid) {
     v = {
       sid, logEl: el("div", "log"), state: { commands: [] }, curText: null, curThought: null, thoughtBuf: "", thoughtStart: 0,
       busyLabel: null, busyStart: 0, unread: false, draft: "", scrollTop: null, followBottom: true, asks: new Map(), curTool: null, planEl: null,
-      terms: new Map(), tabs: [], activeTab: null, panelOpen: false, panelEl: el("div", "panelview"),
+      terms: new Map(), tabs: [], activeTab: null, panelOpen: false, panelEl: el("div", "panelview"), panelFull: false,
     };
     v.logEl.hidden = true; logsEl.appendChild(v.logEl);
     v.panelEl.hidden = true; $("panelviews").appendChild(v.panelEl);
@@ -397,6 +397,9 @@ function handle(m) {
         box.appendChild(b);
       });
       v.asks.set(m.id, box);
+      // An approval needs the user's eyes. If the panel is eating the whole
+      // screen, drop it back so the chat (home of this box) shows.
+      if (v === active && v.panelFull) { v.panelFull = false; renderPanel(); }
       add(v, box); break;
     }
     case "answered": {
@@ -496,6 +499,9 @@ function show(sid) {
     $("status").textContent = "";
   }
   renderPanel(); renderSidebar(); renderCrumb(); renderTitle(); renderWelcome(); renderAttachments();
+  // A different session can point at a different workspace, so the tree has
+  // to follow. loadTree() is a no-op when the workspace is already cached.
+  if (sideTab === "tree") loadTree();
   stick();
 }
 function newSession(path) {
@@ -580,11 +586,181 @@ function renderWelcome() {
 }
 setInterval(() => { renderSidebar(); }, 30000);
 
+// ---- file tree (left sidebar) -------------------------------------------
+// Deferred render: don't fetch until the Files tab is first shown, and never
+// block the first message. The whole tree arrives in one payload (the server
+// walks it), so expanding a directory is pure DOM — no refetch.
+const treeCache = new Map(); // workspace path -> FsTree
+let treeRoot = "";          // workspace path the rendered tree is rooted at
+let sideTab = "sessions";
+// The hub snapshot carries every session's workspace from the first frame,
+// while state.workspace only arrives once the model has actually started — so
+// a session that is still starting (or whose backend failed) has no
+// state.workspace even though it does have a folder. Read the snapshot first.
+function currentWorkspace() {
+  const sid = active && active.sid;
+  const info = sid ? sessInfo.get(sid) : null;
+  return (info && info.workspace) || (active && active.state && active.state.workspace) || "";
+}
+function switchTab(t) {
+  sideTab = t === "tree" ? "tree" : "sessions";
+  const tabs = document.querySelector(".side-tabs");
+  if (tabs) {
+    tabs.querySelectorAll(".side-tab").forEach((n) => n.classList.toggle("on", n.dataset.tab === sideTab));
+  }
+  $("sessions-panel").classList.toggle("on", sideTab === "sessions");
+  $("tree-panel").classList.toggle("on", sideTab === "tree");
+  ls.set("smol.side.tab", sideTab);
+  if (sideTab === "tree") loadTree();
+}
+function loadTree(force) {
+  const node = $("fstree");
+  if (!node) return;
+  if (!active) { renderTreeMessage(node, "No session open — pick or start one first."); return; }
+  const sid = active.sid;
+  // The server resolves the workspace from the sid, so an unknown session is
+  // the only case that yields no tree — don't gate the fetch on client state.
+  const key = currentWorkspace() || sid;
+  if (force) treeCache.delete(key);
+  const cached = treeCache.get(key);
+  if (cached) { renderTree(node, cached); return; }
+  renderTreeMessage(node, "Loading…");
+  // GET, not POST: the tree route is a GET in the hub's query switch.
+  fetch("/fs/tree?k=" + k + "&sid=" + encodeURIComponent(sid))
+    .then((r) => r.json())
+    .then((r) => {
+      if (active && active.sid !== sid) return; // the user moved on
+      if (r && r.ok && r.tree) {
+        treeCache.set(key, r.tree);
+        renderTree(node, r.tree);
+      } else {
+        renderTreeMessage(node, "This session has no workspace folder.");
+      }
+    })
+    .catch(() => { renderTreeMessage(node, "Cannot reach the smolcoder server."); });
+}
+function renderTreeMessage(node, msg) {
+  node.innerHTML = "";
+  node.appendChild(el("div", "tree-empty", msg));
+}
+function treeRow(name, path, isDir) {
+  const row = el("div", "tri" + (isDir ? " dir" : ""));
+  const arrow = el("span", "arrow", isDir ? "▸" : "");
+  row.appendChild(arrow);
+  row.appendChild(el("span", "fname", name));
+  row.title = path;
+  return { row, arrow };
+}
+function renderTree(node, x) {
+  node.innerHTML = "";
+  // The server resolves the workspace root, so trust it for relative paths
+  // instead of re-deriving it from a path that may be "~"-prefixed or stored
+  // unresolved.
+  treeRoot = x.path || "";
+  const label = $("fslabel");
+  if (label) { label.textContent = x.name || "Files"; label.title = treeRoot; }
+  const expandAll = $("fsexpandall");
+  if (expandAll) { expandAll.textContent = "▸"; expandAll.title = "expand all"; }
+  // The root is the workspace itself and the header already names it, so the
+  // tree starts at its children instead of repeating the same row.
+  const frag = document.createDocumentFragment();
+  fillTree(frag, x);
+  node.appendChild(frag);
+}
+function fillTree(host, x) {
+  for (const c of x.children || []) {
+    const { row, arrow } = treeRow(c.name, c.path, true);
+    const body = el("div", "tree-body");
+    fillTree(body, c);
+    body.hidden = true;
+    row.onclick = () => {
+      const open = body.hidden;
+      body.hidden = !open;
+      arrow.textContent = open ? "▾" : "▸";
+    };
+    host.appendChild(row);
+    host.appendChild(body);
+  }
+  for (const f of x.files || []) {
+    const p = x.path + "/" + f;
+    const { row } = treeRow(f, p, false);
+    row.onclick = () => insertFile(p);
+    host.appendChild(row);
+  }
+}
+function setTreeExpanded(open) {
+  const root = $("fstree");
+  if (!root) return;
+  root.querySelectorAll(".tri.dir").forEach((row) => {
+    const body = row.nextElementSibling;
+    if (!body || !body.classList.contains("tree-body")) return;
+    body.hidden = !open;
+    const arrow = row.querySelector(".arrow");
+    if (arrow) arrow.textContent = open ? "▾" : "▸";
+  });
+  const btn = $("fsexpandall");
+  if (btn) {
+    btn.textContent = open ? "▾" : "▸";
+    btn.title = open ? "collapse all" : "expand all";
+  }
+}
+function insertFile(p) {
+  const root = treeRoot || currentWorkspace();
+  let rel = p;
+  if (root && rel.slice(0, root.length) === root) rel = rel.slice(root.length);
+  rel = rel.replace(/^[\\/]+/, "").replace(/\\/g, "/");
+  if (!rel) return;
+  // A path with spaces has to survive the trip through the model's tool call,
+  // so quote it rather than percent-encoding it (the agent needs the real name).
+  const token = /\s/.test(rel) ? '"' + rel + '"' : rel;
+  const ta = $("input");
+  if (ta) {
+    const pos = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+    const before = ta.value.slice(0, pos);
+    const after = ta.value.slice(pos);
+    const glue = before && !/\s$/.test(before) ? " " : "";
+    ta.value = before + glue + token + (after ? " " + after : "");
+    ta.selectionStart = ta.selectionEnd = (before + glue + token).length;
+    autoGrow();
+    ta.focus();
+  }
+}
+// Wire tabs + deferred tree load once the DOM is ready.
+document.addEventListener("DOMContentLoaded", () => {
+  const tabs = document.querySelector(".side-tabs");
+  if (tabs) {
+    tabs.addEventListener("click", (e) => {
+      const t = e.target.closest(".side-tab");
+      if (t) switchTab(t.dataset.tab);
+    });
+    switchTab(ls.get("smol.side.tab") === "tree" ? "tree" : "sessions");
+  }
+  const expandAll = $("fsexpandall");
+  if (expandAll) {
+    expandAll.onclick = () => setTreeExpanded(expandAll.textContent !== "▾");
+  }
+  const reload = $("fsreload");
+  if (reload) reload.onclick = () => loadTree(true);
+  const full = $("panelfull");
+  if (full) {
+    full.addEventListener("click", () => {
+      if (!active || !active.panelOpen) return;
+      active.panelFull = !active.panelFull;
+      renderPanel();
+    });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "b" && e.ctrlKey && e.shiftKey) {
+        if (active && active.panelOpen) { active.panelFull = !active.panelFull; renderPanel(); e.preventDefault(); }
+      }
+    });
+  }
+});
+
 // ---- folder picker --------------------------------------------------------
 let fsState = { path: "", parent: null };
 function openDialog(start) {
   $("modal").hidden = false;
-  browse(start || (active && active.state.workspace) || "");
+  browse(start || currentWorkspace());
   setTimeout(() => $("fspath").focus(), 0);
 }
 function closeDialog() { $("modal").hidden = true; }
@@ -634,7 +810,7 @@ $("fsopen").onclick = () => openFolder(fsState.path);
 let panelWidth = Math.max(300, Number(ls.get("smol.panel.w")) || 520);
 function panelKey(v) { return "smol.panel." + v.sid; }
 function savePanel(v) {
-  ls.set(panelKey(v), JSON.stringify({ open: v.panelOpen, active: v.activeTab, tabs: v.tabs.filter((t) => t.kind === "browser").map((t) => ({ kind: "browser", url: t.url })) }));
+  ls.set(panelKey(v), JSON.stringify({ open: v.panelOpen, full: v.panelFull, active: v.activeTab, tabs: v.tabs.filter((t) => t.kind === "browser").map((t) => ({ kind: "browser", url: t.url })) }));
 }
 function loadPanelState(v) {
   try {
@@ -646,6 +822,7 @@ function loadPanelState(v) {
       buildBrowserTab(v, tab); v.tabs.push(tab);
     }
     v.panelOpen = !!st.open;
+    v.panelFull = !!st.full;
     v.activeTab = st.active || (v.tabs[0] && v.tabs[0].id) || null;
   } catch (e) {}
 }
@@ -659,8 +836,15 @@ function renderPanel() {
   $("btnterm").classList.toggle("on", !!(cur && cur.kind === "term"));
   for (const o of views.values()) o.panelEl.hidden = o !== v || !open;
   if (!open) return;
-  // Never let the panel squeeze the chat below ~40% of a small window.
-  panelEl.style.width = Math.min(panelWidth, Math.max(300, window.innerWidth * 0.6)) + "px";
+  // Never let the panel squeeze the chat below ~20% of a small window.
+  // Keep this in sync with the 0.8 upper bound in the #panelgrip drag handler,
+  // otherwise a switch that calls renderPanel() after dragging past 60% snaps
+  // the panel back to a narrower width.
+  const pw = Math.min(panelWidth, Math.max(300, window.innerWidth * 0.8));
+  panelEl.style.width = v.panelFull ? "" : pw + "px";
+  document.body.classList.toggle("panel-full", v.panelFull);
+  if (v.panelFull) panelEl.style.setProperty("--fw-panel", pw + "px");
+  $("panelfull").classList.toggle("on", v.panelFull);
   tabsEl.innerHTML = "";
   for (const t of v.tabs) {
     const b = el("div", "ptab" + (t === cur ? " on" : ""));

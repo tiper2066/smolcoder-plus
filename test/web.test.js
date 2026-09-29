@@ -48,6 +48,69 @@ test("web: every element the client looks up by id exists in the page", () => {
   assert.deepEqual(missing, [], `client.ts looks up ids the page does not define: ${missing.join(", ")}`);
 });
 
+test("web: an approval in full-screen drops the panel back so the chat shows", () => {
+  // The confirm handler must bail out of full-screen when an approval box is
+  // added, otherwise the user never sees the "run?" prompt behind the panel.
+  assert.ok(/case "confirm"/.test(CLIENT_JS), "the confirm handler is present");
+  // Confirm the handler is followed by the bail-out (not just the answered case).
+  const idx = CLIENT_JS.indexOf('case "confirm"');
+  const tail = CLIENT_JS.slice(idx, CLIENT_JS.indexOf('case "answered"'));
+  assert.match(tail, /panelFull\s*=\s*false/, "clears full-screen on confirm");
+  assert.ok(/v === active/.test(tail), "only when this session is the focused one");
+});
+
+test("web: the sidebar tab switch matches .side-tab and hides the other panel", () => {
+  // Regression: the click handler looked for ".tab" while the page ships
+  // ".side-tab", so the tabs did nothing and both panels stayed visible —
+  // the file tree appeared stacked under the session list.
+  assert.ok(!/closest\("\.tab"\)/.test(CLIENT_JS), "no stale .tab selector");
+  assert.ok(!/querySelectorAll\("\.tab\.on"\)/.test(CLIENT_JS), "no stale .tab.on selector");
+  assert.match(CLIENT_JS, /closest\("\.side-tab"\)/, "the tab click is bound to .side-tab");
+  const { STYLES } = require("../dist/web/styles");
+  assert.match(STYLES, /\.side-panel:not\(\.on\)\s*\{\s*display:\s*none/, "the inactive panel is hidden");
+  // The panels are toggled through the .on class the page already ships.
+  assert.match(CLIENT_JS, /\$\("sessions-panel"\)\.classList\.toggle\("on"/);
+  assert.match(CLIENT_JS, /\$\("tree-panel"\)\.classList\.toggle\("on"/);
+});
+
+test("web: the file tree is fetched over GET and rendered as a nested tree", () => {
+  // Regression: the tree was loaded with post(), but the hub only serves
+  // GET /fs/tree — the sidebar stayed empty no matter what.
+  assert.ok(!/post\("\/fs\/tree"/.test(CLIENT_JS), "the tree is not POSTed");
+  assert.match(CLIENT_JS, /fetch\("\/fs\/tree\?k=" \+ k \+ "&sid="/, "the tree is fetched with the auth token");
+  // Regression: the old renderer flattened every directory into one fragment
+  // and attached an empty child container, so nothing ever nested.
+  assert.match(CLIENT_JS, /function fillTree\(host, x\)/, "children are rendered into their parent's body");
+  assert.match(CLIENT_JS, /body\.hidden = true/, "directories start collapsed");
+  // A session switch must not keep showing the previous session's workspace.
+  const show = CLIENT_JS.slice(CLIENT_JS.indexOf("function show(sid)"), CLIENT_JS.indexOf("function newSession"));
+  assert.match(show, /loadTree\(\)/, "switching sessions refreshes the tree");
+});
+
+test("web: the file tree never depends on state.workspace to find the folder", () => {
+  // Regression: the workspace was read from state.workspace, which the server
+  // only sends once the model has started. Until then (or if the backend
+  // failed) the Files tab said "This session has no workspace folder" even
+  // though the session does have one. The hub snapshot has it from frame one.
+  const fn = CLIENT_JS.slice(CLIENT_JS.indexOf("function currentWorkspace"), CLIENT_JS.indexOf("function switchTab"));
+  assert.match(fn, /sessInfo\.get\(sid\)/, "reads the workspace from the hub snapshot");
+  const tree = fn + CLIENT_JS.slice(CLIENT_JS.indexOf("function loadTree"), CLIENT_JS.indexOf("function renderTreeMessage"));
+  assert.ok(
+    !/if \(!ws\) \{ renderTreeMessage/.test(tree),
+    "the fetch is not gated on having a workspace (the server resolves it from the sid)"
+  );
+  // The folder picker had the same latent bug.
+  assert.ok(!/active && active\.state\.workspace/.test(CLIENT_JS.replace(fn, "")), "no bare state.workspace read left");
+});
+
+test("web: the relative path the composer gets is derived from the server's root", () => {
+  // The server resolves "~" and normalises the path, so the client must strip
+  // the root the response carried rather than re-deriving one.
+  assert.match(CLIENT_JS, /treeRoot = x\.path \|\| ""/, "the rendered root is remembered");
+  const ins = CLIENT_JS.slice(CLIENT_JS.indexOf("function insertFile"));
+  assert.match(ins, /const root = treeRoot \|\| currentWorkspace\(\)/);
+});
+
 // ---- channel -----------------------------------------------------------------
 
 function makeChannel(id = "s1") {
@@ -333,6 +396,51 @@ test("hub: token guard, page, ping, folder listing, and the running-hub record",
     hub.close();
   }
   assert.equal(readHubRecord(dataDir), null, "the record is removed on shutdown");
+});
+
+test("hub: /fs/tree returns the workspace directory tree for a session", async () => {
+  const dataDir = tmpdir("smol-hub-tree-");
+  const ws = path.join(dataDir, "proj");
+  fs.mkdirSync(ws);
+  fs.mkdirSync(path.join(ws, "app"));
+  fs.writeFileSync(path.join(ws, "app", "package.json"), "{}");
+  fs.mkdirSync(path.join(ws, "notes"));
+  fs.mkdirSync(path.join(ws, ".github"), { recursive: true });
+  fs.writeFileSync(path.join(ws, ".github", "workflow.yml"), "on: push");
+  fs.mkdirSync(path.join(ws, ".git"));
+  fs.writeFileSync(path.join(ws, ".git", "HEAD"), "ref");
+  fs.writeFileSync(path.join(ws, ".gitignore"), "*.log");
+  fs.writeFileSync(path.join(ws, ".env.example"), "KEY=");
+  fs.writeFileSync(path.join(ws, ".DS_Store"), "junk");
+  fs.mkdirSync(path.join(ws, "node_modules"), { recursive: true });
+  fs.mkdirSync(path.join(ws, "node_modules", "left-pad"));
+  fs.mkdirSync(path.join(ws, "dist"));
+  fs.writeFileSync(path.join(ws, "file.txt"), "x");
+  const hub = new WebHub({ port: 0, prefs: {}, help: "help", version: "9.9.9", dataDir, factory: fakeFactory([]), quiet: true });
+  await hub.start();
+  const k = "?k=" + hub.authToken;
+  try {
+    const { id } = JSON.parse((await request(hub, "POST", "/sessions/new" + k, { workspace: ws })).body);
+    const res = await request(hub, "GET", "/fs/tree" + k + "&sid=" + id);
+    const body = JSON.parse(res.body);
+    assert.equal(body.ok, true);
+    const t = body.tree;
+    assert.equal(t.name, "proj");
+    assert.deepEqual(t.files.sort(), [".env.example", ".gitignore", "file.txt"], "dot files are listed");
+    const childNames = t.children.map((c) => c.name).sort();
+    assert.deepEqual(childNames, [".github", "app", "notes"], "dot folders are listed too");
+    const app = t.children.find((c) => c.name === "app");
+    assert.deepEqual(app.files, ["package.json"]);
+    assert.equal(app.children.length, 0);
+    assert.equal(t.children.find((c) => c.name === ".git"), undefined, ".git stays hidden (history is not project files)");
+    assert.equal(t.files.includes(".DS_Store"), false, ".DS_Store stays hidden");
+    assert.equal(t.children.find((c) => c.name === "node_modules"), undefined, "node_modules is skipped");
+    assert.equal(t.children.find((c) => c.name === "dist"), undefined, "build output is skipped");
+    const bad = await request(hub, "GET", "/fs/tree" + k + "&sid=zzz");
+    assert.equal(JSON.parse(bad.body).tree, null, "unknown session yields no tree");
+  } finally {
+    hub.close();
+  }
 });
 
 test("hub: sessions start, echo, save, close, resume, delete; workspaces add and remove", async () => {

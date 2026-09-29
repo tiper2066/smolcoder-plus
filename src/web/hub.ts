@@ -43,6 +43,27 @@ export interface HubOptions {
   quiet?: boolean;
 }
 
+/** Directories the sidebar tree never descends into: build output and caches
+ * that would bury the source tree (and make the walk crawl). */
+const TREE_SKIP = new Set(["node_modules", "dist", "build", "out", "target", "__pycache__", ".venv", "venv", ".next", ".cache", "coverage"]);
+
+/** Dot entries still hidden: .git is tens of thousands of nodes of history,
+ * and .DS_Store is Finder litter, not project files. Everything else that
+ * starts with a dot is shown. */
+const TREE_HIDE = new Set([".git", ".DS_Store"]);
+
+/** One entry in the workspace directory tree: a directory and its children. */
+export interface FsTree {
+  /** Absolute path of the directory this node represents. */
+  path: string;
+  /** The node's own name (empty for the workspace root). */
+  name: string;
+  /** Immediate child directories, sorted with directories before files. */
+  children: FsTree[];
+  /** Immediate child files, or null if this node was never expanded. */
+  files: string[] | null;
+}
+
 interface Live {
   id: string;
   workspace: string;
@@ -65,6 +86,8 @@ interface Live {
   /** The user renamed it by hand: never overwrite that. */
   titleByUser: boolean;
   saveFailed?: boolean;
+  /** The workspace's directory tree, for the sidebar file tree. */
+  tree: () => FsTree | null;
 }
 
 // ---- the running-hub record -----------------------------------------------
@@ -427,6 +450,7 @@ export class WebHub {
       // A saved session already has a name; only fresh ones get one written.
       titleTries: meta.title ? 99 : 0,
       titleByUser: false,
+      tree: () => this.fsTree(live.workspace),
     };
     this.live.set(id, live);
     return live;
@@ -444,6 +468,41 @@ export class WebHub {
     live.channel.pushState();
     this.changed();
     this.scheduleSave(live);
+  }
+
+  /** Build the workspace directory tree for the sidebar file tree. */
+  private fsTree(workspace: string | null): FsTree | null {
+    if (!workspace) return null;
+    try {
+      const root = path.resolve(expandHome(workspace));
+      return this.walk(root);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Recursively walk a directory, capped to avoid runaway trees. */
+  private walk(dir: string, depth = 0): FsTree | null {
+    if (depth > 6) return null;
+    let children: fs.Dirent[];
+    try {
+      children = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    // Dot entries are shown — .github, .vscode and .env belong in a project
+    // tree. Only the two that are pure noise (or a hazard) stay hidden: .git
+    // alone is tens of thousands of nodes, and .DS_Store is not project code.
+    const dirs = children.filter((e) => e.isDirectory() && !TREE_HIDE.has(e.name) && !TREE_SKIP.has(e.name));
+    const files = children.filter((e) => e.isFile() && !TREE_HIDE.has(e.name)).map((e) => e.name).sort();
+    const name = path.basename(dir);
+    const tree: FsTree = { path: dir, name, children: [], files };
+    for (const d of dirs.slice(0, 200)) {
+      const child = this.walk(path.join(dir, d.name), depth + 1);
+      if (child) tree.children.push(child);
+    }
+    tree.children.sort((a, b) => a.name.localeCompare(b.name));
+    return tree;
   }
 
   private async spawn(live: Live, restore: SessionSnapshot | null): Promise<void> {
@@ -695,6 +754,13 @@ export class WebHub {
         case "/fs":
           json(200, browseDir(url.searchParams.get("path")));
           return;
+        case "/fs/tree": {
+          const sid = String(url.searchParams.get("sid") ?? "");
+          const live = SESSION_ID_RE.test(sid) ? this.live.get(sid) : undefined;
+          const tree = live ? live.tree() : null;
+          json(200, { ok: true, tree });
+          return;
+        }
         case "/upload":
           this.serveUpload(res, url);
           return;
