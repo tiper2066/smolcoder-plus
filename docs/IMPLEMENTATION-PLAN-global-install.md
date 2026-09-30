@@ -15,6 +15,15 @@ smolp            # short alias — same command
 Verified end-to-end: `npm publish` → `npm view` → fresh `npm install` from the
 registry → both `smolp --version` and `smolcoder-plus --version` print `1.0.1`.
 
+### 1.1.0 — File Edit 패널 + 사이드바 파일 트리 (2026-09-30)
+- 좌측 사이드바에 **Sessions / Files 탭** + 워크스페이스 파일 트리 (dot 파일 노출, 빌드 산출물·`.git` 숨김).
+- 우측 패널에 **`file` kind 탭**: 파일을 열고 편집·저장 (`Ctrl/Cmd+S`), mtime 충돌 시 확인 후에만 덮어씀,
+  읽기 전용 세션·바이너리·워크스페이스 밖 파일은 **탭을 만들지 않고** 사유를 알림.
+- 트리에서 파일 **클릭 = 에디터로 열기**(행 hover `＋` 는 composer 에 경로 삽입).
+- `⛶` **전체화면 패널** 수정 — 이전엔 `position: absolute` + `width: var(--fw-panel)` 이라
+  절반 폭으로 채팅을 덮고 있었다. 이제 `#main` 을 숨기고 flex 로 확장하므로 진짜 전체 폭이 된다.
+- `#paneltabs` 안에 있던 `#panelfull` 버그 수정 — `renderPanel()` 이 스트립을 비우면서 버튼을 파괴.
+
 ### 1.0.1 — `smolp` alias (2026-09-24)
 - `bin` now ships **two** entries: `smolp` and `smolcoder-plus` (same entry point).
 - CLI messages use the command the user actually typed (`CMD` in `src/index.ts`),

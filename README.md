@@ -105,6 +105,19 @@ smolp --web            # or: smolcoder-plus --web
   override: `smolp --web 8080`).
 - Shows a **sidebar of your workspaces and sessions**, plus an embedded
   browser and terminal panel so you can watch the agent work.
+- The sidebar has two tabs. **Sessions** is the session list; **Files** is your
+  workspace tree. Dot folders and dotfiles (`.github`, `.vscode`, `.env`) are
+  shown; build output and `.git` are not. `⟳` re-reads the tree, `▸` opens every
+  folder at once.
+- **Click a file in the tree** to open it in the editor panel — a real editor
+  tab with save (`Ctrl/Cmd+S` or `💾`) and re-read (`↻`). The hover `＋` on a file
+  row puts its path in the composer instead, so you can tell the agent about it.
+- Saves never clobber silently: if the file changed on disk while you were
+  editing, smolcoder asks before overwriting. Files you can't edit — read-only
+  sessions, binaries, anything outside the workspace — say so instead of opening
+  a dead tab.
+- `⛶` (or `Ctrl/Cmd+Shift+B`) makes the panel take the whole width beside the
+  sidebar. It steps aside by itself if the agent needs an approval.
 - Run it from a project directory to start a session there immediately, or
   from anywhere (e.g. your home directory) to pick a workspace in the sidebar.
 - A second `smolp --web` from another folder won't start a new server — it

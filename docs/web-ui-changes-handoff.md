@@ -2,8 +2,8 @@
 
 **작성자:** smolcoder
 **작성일:** 2026-09-23
-**최종 업데이트:** 2026-09-30 (단계 2-A/2-B 완료 — 파일 읽기/쓰기 API + File Edit 패널)
-**프로젝트:** smolcoder-plus v1.0.6 (전역 bin: `smolp` / `smolcoder-plus`)
+**최종 업데이트:** 2026-09-30 (단계 2-A/2-B 완료 · v1.1.0 릴리스 — 파일 에디터 패널 + 사이드바 파일 트리)
+**프로젝트:** smolcoder-plus v1.1.0 (전역 bin: `smolp` / `smolcoder-plus`)
 **관련 계획서:** `docs/IMPLEMENTATION-PLAN-web-search-integration.md`, `docs/IMPLEMENTATION-PLAN-global-install.md`, `docs/handoff.md`
 
 > 이 문서는 새 세션이 작업 시작 전에 **현황을 빠르게 파악**하고 각 단계를 체크할 수 있도록 작성된 것입니다.
