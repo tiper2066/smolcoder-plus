@@ -2,7 +2,7 @@
 
 **작성자:** smolcoder
 **작성일:** 2026-09-23
-**최종 업데이트:** 2026-09-30 (단계 2-A/2-B 완료 · v1.1.0 릴리스 — 파일 에디터 패널 + 사이드바 파일 트리)
+**최종 업데이트:** 2026-09-30 (Web 피커 버그 3건 수정 — 옵션이 안 사라짐 / 전체화면이면 안 보임 / **방향키 조작 없음**)
 **프로젝트:** smolcoder-plus v1.1.0 (전역 bin: `smolp` / `smolcoder-plus`)
 **관련 계획서:** `docs/IMPLEMENTATION-PLAN-web-search-integration.md`, `docs/IMPLEMENTATION-PLAN-global-install.md`, `docs/handoff.md`
 
@@ -341,10 +341,10 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
     - 실측(1440px): 일반 520px@x=920 → 전체화면 **1192px@x=248**(사이드바 바로 옆, `#main`·composer 숨김, grip 숨김) → 복귀 520px@x=920. 820px 좁은 화면: 820px 전체
 - [x] `client.ts` `renderPanel()`(client.ts:788) 안에서 `document.body.classList.toggle("panel-full", v.panelFull)` — `renderPanel()`은 세션 전환·탭 전환마다 이미 호출되므로 별도 sites 없음
 - [x] 토글 버튼: `#paneltabs`의 `+◎` / `+>_` / `»` 버튼 옆(`client.ts:678-682`)에 `⛶` 아이콘 버튼 `#panelfull` 추가. `renderPanel()`(client.ts:790) 가 `on` 클래스 토글, 핸들러(client.ts:687-693) 가 `active.panelFull` 토글 + `renderPanel()`
-- [x] 상태 영속화: `v.panelFull`(세션별) → `savePanel()`(client.ts:756) JSON 에 `full: v.panelFull` 추가, `loadPanelState()`(client.ts:768) 에서 복원
-- [x] **승인 요청 시 자동 해제 (MUST)** — **구현 완료 (client.ts:396)**
-  - 에이전트 승인 박스는 `client.ts:389` `case "confirm"` 에서 `#logs` 안에 렌됨 (`el("div", "ask")`)
-  - `case "confirm"` 끝에 추가: `if (v === active && v.panelFull) { v.panelFull = false; renderPanel(); }`
+- [x] 상태 영속화: `v.panelFull`(세션별) → `savePanel()`(client.ts:932) JSON 에 `full: v.panelFull` 추가, `loadPanelState()`(client.ts:943) 에서 복원
+- [x] **승인 요청 시 자동 해제 (MUST)** — **구현 완료 (`case "confirm"`, client.ts:413 → `revealChat()`)**
+  - 에이전트 승인 박스는 `client.ts:413` `case "confirm"` 에서 `#logs` 안에 렌됨 (`el("div", "ask")`)
+  - `case "confirm"` 끝에 추가: `revealChat(v)` — `select`/`prompt` 도 함께 씀
     - `v` = 이벤트가 속한 세션, `active` = 현재 포커스된 세션 — 승인 박스가 보이는 chat(`v.logEl`)에 놓이므로 **이 세션이 active일 때만** 전체화면을 해제한다
     - `renderPanel()` 안의 `document.body.classList.toggle("panel-full", v.panelFull)` 이 body 클래스 + `#panelfull` on 토글 + inline width 복원을 한 번에 처리 → 별도 site 없음
   - 검증: 전체화면 상태에서 승인 요청 → 패널이 일반 너비로 복귀하고 승인 박스가 chat에 보임
@@ -455,6 +455,113 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 회귀 테스트: "web: nothing static lives inside #paneltabs, which renderPanel empties".
 
 
+### 🐛 `/models`·`/effort` 피커를 골라도 "옵션이 사라지지 않는다" (2026-09-30 수정)
+
+증상: 모델/추론강도 피커가 뜨는데, 옵션을 고른 뒤 **옵션 목록이 그대로 남았다**(고른 뒤
+새 피커가 곧바로 다시 떴다).
+
+원인은 두 겹이었다.
+
+1. **서버(`src/web/channel.ts`)** — `/models` 는 `detectAll()` 로 백엔드를 훑은 뒤에야
+   피커를 띄운다(실제론 수 초). 그 사이 사용자가 상태바 칩을 한 번 더 누르면 같은 명령이
+   **두 번 큐에 들어간다**. 첫 번째를 답하면 두 번째가 곧바로 처리되어 **새 피커가 열린다.**
+   → 사용자는 "옵션이 안 사라진다"고 느낀다. `commandOf()` 로 명령어를 정규화해,
+   **큐에 있거나 실행 중인 같은 명령은 버린다**(`runningCommand` 은 `refresh()` 에서 해제).
+2. **클라이언트(`src/web/client.ts`)** — 안전망. 한 세션은 한 번에 하나의 질문만 기다릴 수
+   있으므로, 새 `select`/`prompt` 이 오면 **같은 종류의 낡은 박스를 `closeAsk()` 로 닫는다**
+   (`box._ask` 로 종류를 구분). `confirm`(승인)은 쌓일 수 있어 건드리지 않는다.
+
+회귀 테스트: `channel: a repeated slash command is dropped while the first is queued or running`,
+`web: a new picker closes the stale one, so options always go away`.
+실측(2026-09-30): headless Chrome + CDP 로 칩 두 번 클릭 → 옵션 선택 → 피커 0개, 상태바 반영.
+
+
+### 🐛 "옵션 버튼으로 이동이 안 된다" — 패널 전체화면이면 피커가 화면 밖에 있다 (2026-09-30 수정)
+
+증상: 위 수정 후 `/models`·`/effort` 피커가 **안 뜬다 / 뜨지만 버튼을 클릭할 수 없다.**
+
+원인은 지난 수정과 무관한, 더 이전 결함이었다. `8330ce9`(패널 전체화면)가
+`#main` 을 숨기는 CSS(`styles.ts` 의 `body.panel-full #main { display: none; }`)를 넣었는데,
+**전체화면에서 빠져나오는 bail-out 을 `confirm` 핸들러에만 썼다.**
+`/models`·`/effort` 는 `select` 다 → 피커 박스가 DOM 에는 들어가되 `#main` 안에 숨어
+**높이가 0** 이 된다. 사용자에게는 "옵션이 안 떠서 버튼을 누를 수 없다"로 보인다.
+전체화면은 `localStorage` 에 저장되므로 **새로고침 후에도 그대로** 재현된다.
+
+→ `revealChat(v)` 하나로 빼서 `confirm`·`select`·`prompt` **세 핸들러 모두**가
+박스를 `add()` 하기 **전에** 부른다. 핸들러마다 복사본을 두지 않게 회귀 테스트가
+`panelFull = false` 가 코드 전체에 **딱 한 번만** 나는 것도 확인한다.
+
+회귀 테스트: `web: every question drops the panel out of full width so the chat shows`.
+역검증 3회 — (A) `select` 에서 bail-out 제거, (B) `add()` 뒤로 순서 뒤집음,
+(C) `v !== active` 가드 제거 — 모두 테스트가 잡았다.
+
+실측(2026-09-30, headless Chrome + CDP, 1440px 전체화면):
+
+| 박스 | 수정 전 `#main` / 높이 / 클릭 | 수정 후 |
+|---|---|---|
+| `select` (`/models`) | `none` / 0 / ❌ | `flex` / 196 / ✅ |
+| `prompt` | `none` / 0 / ❌ | `flex` / 125 / ✅ |
+| `confirm` | `flex` / 124 / ✅ (이미 정상) | `flex` / 124 / ✅ |
+
+세 박스 모두 답한 뒤 잔여 박스 0개. 좁은 창(820px, 패널이 채팅 위로 떠 있는 경우)도
+정상 — 이 문제의 전제인 **전체화면**에서만 재현된다.
+
+> 함정: 이 버그는 CSS(`display:none`)와 JS 핸들러가 **다른 파일**에 있어서
+> `npm test`로는 절대 안 잡힌다. 패널을 건드릴 때는 "이 상태에서 질문 박스가 보이는가"를
+> headless Chrome으로 반드시 실측할 것.
+
+
+### ⌨️ Web 피커에 키보드 조작이 없다 — 방향키가 안 먹는다 (2026-09-30 수정)
+
+증상: `/models`·`/effort` 목록이 **떴는데 방향키로 이동이 안 된다.** 마우스 클릭은 된다.
+
+원인: **터미널 TUI 에만 키보드 탐색이 있고 Web UI 에는 없었다.**
+`src/tui/tui.ts:328` 의 `keySelect()` 는 ↑/↓/Tab 이동 · 타이핑 필터 · Enter 선택 · Esc 취소를
+처음부터 처리한다. Web 쪽 `case "select"` 는 **버튼 `onclick` 만** 있었다
+(`ArrowUp`/`ArrowDown` 이 `client.ts` 에 나오는 곳은 slash 메뉴와 입력 히스토리뿐).
+
+→ `case "select"` 를 다시 씻어 터미널과 **같은 키**를 받게 했다.
+
+| 키 | 동작 |
+|---|---|
+| ↑ / ↓ , Tab / Shift+Tab | 옵션 이동 (양 끝에서 **순환**) |
+| 문자 입력 | 라벨 필터, Backspace 로 지움 |
+| Enter | 선택 |
+| Esc | 취소 (`index: null`) |
+
+구현하며 지킨 것 3가지:
+
+1. **`box.tabIndex = 0` + `box.focus()`** — 이게 없으면 키가 composer textarea 로 간다.
+   `v === active` 인 세션에서만 focus 한다(백그라운드 세션이 focus 를 빼앗으면 안 된다).
+2. **Enter/Esc 는 `stopPropagation()`** — 안 하면 페이지 전역 핸들러
+   (`document.addEventListener("keydown", ...)` — `client.ts` 하단)가 받아서
+   Enter 는 **메시지를 전송**하고, Esc 는 **턴 전체를 취소**한다.
+   prompt 박스가 이미 `Escape` 에 쓰던 방법과 같다.
+3. **Enter 가 보내는 값은 `vis[idx].i`** (필터된 목록의 위치가 아니라 **원래 옵션 인덱스**).
+   TUI 도 `s.options.indexOf(...)` 로 같이 한다. 필터 후 Enter 가 엉뚱한 항목을 고르는 버그.
+
+커서 표시를 `.opt.current`(현재 설정값, 초록 링)와 **분리**했다 —
+`.opt.cursor`(키보드 커서, 시안). 같은 styling 이면 "지금 선택된 항목"으로 오해한다.
+그리고 `paint()` 는 **모든 행의 cursor 클래스를 먼저 지운 뒤** 하나만 다시 켠다
+(숨긴 행에 cursor 가 남으면 필터를 지웠을 때 그려 보인다 — 실제로 이 버그를 만들었다).
+
+회귀 테스트 2개:
+`web: a picker is driven by the keyboard, like the terminal one`,
+`web: the terminal picker and the web picker answer the same keys`
+(두 번째는 `tui.ts` 의 `keySelect()` 를 **읽어서** 키 목록이 어긋나면 잡는다 —
+SessionUI 계약은 공유인데 UI 만 갈라지면 사용자에게 "웹이 더 낫다"고 느껴지는 결함이다).
+
+역검증 4회 — ① focus 제거 ② Esc 의 `stopPropagation` 제거 ③ cursor 클리어 제거
+④ Enter 가 필터 위치 전송 — 모두 테스트가 잡았다.
+
+실측(2026-09-30, headless Chrome + **CDP `Input.dispatchKeyEvent` 실제 키 입력**, 전체화면 상태):
+↑↓ 이동 · 양끝 순환 · `llama` 필터 → 1개 · Backspace 복원 · Enter → 세션이 index 2 적용 ·
+`zzz` 필터 → `no matches` + 커서 해제 · Esc → 취소되고 **턴은 살아있음** ·
+필터 `hi` → `high` 만 → Enter → index 4 · **마우스 클릭도 그대로 동작**.
+
+> 함정: 합성 `new KeyboardEvent(...)` 로 테스트하면 `element.focus()` 가 안 되므로
+> "포커스가 안 잡혔다" 는 원본 버그를 그대로 통과시킨다. 키보드 UI 는 **실제 키 입력**으로 실측할 것.
+
 ---
 
 ## 4. 설계 결정 (구현 전에 선택 필요 — 위 기본안 권장)
@@ -495,7 +602,7 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 - **`.gitignore`는 파싱하지 않는다** (의도적 결정). 규칙이 빡빡해지면 사용자가 자기 파일을 못 보게 되므로, 숨기는 건 위 상수 두 개뿐.
 - ✅ **에이전트와 동시에 같은 파일 수정** → mtime 409 + confirm 으로 해결(2-A). 이것이 없으면 사용자의 편집이 에이전트 작업으로 덮어써져 분노만 커진다. 실측 완료.
 - **화면 좁을 때 트리가 챗을 좁힘** → `narrow()` 분기에서 기본적으로 파일 탭을 닫은 상태로 시작.
-- **전체화면 중 승인 요청이 안 보임** → 에이전트가 멈춘 것처럼 보이는 최악의 UX. **자동 해제 구현 완료** (client.ts:396, `case "confirm"` 뒤 `v === active && v.panelFull` 으로 해제). 회귀: `test/web.test.js`.
+- **전체화면 중 승인 요청이 안 보임** → 에이전트가 멈춘 것처럼 보이는 최악의 UX. **자동 해제 구현 완료** (`case "confirm"` 뒤 `revealChat()` — `v === active && v.panelFull` 일 때 해제, `select`/`prompt` 도 함께). 회귀: `test/web.test.js`.
 - **전체화면 상태가 세션 전환 후에도 남음** → `v.panelFull`은 세션별이므로 `renderPanel()` 안에서 body class를 갱신하면 자연히 따라간다. localStorage에 값이 없으면 `false`로 시작.
 - **backtick 실수** → client.ts에서 리터럴 백틱 금지, `` \` `` escape (기존 §1.2 제약 그대로 유효).
 - **`panelviews` DOM 누수** → `closeTab()`에서 `t.el.remove()` 호출 확인 (browser 경로가 이미 하고 있음).

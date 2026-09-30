@@ -176,6 +176,13 @@ export const STYLES = String.raw`
   .ask button, .ask .opt { margin: 6px 8px 0 0; background: #1e2428; color: var(--fg); border: 1px solid #2c343a; padding: 4px 12px; cursor: pointer; font: inherit; border-radius: 3px; }
   .ask button:hover, .ask .opt:hover { border-color: var(--accent); }
   .ask .opt.current { border-color: var(--green); }
+  /* Keyboard cursor on a picker option. Distinct from .current (the green
+     "this is what is set now" ring) so the two never read as one thing. */
+  .ask { outline: none; }
+  .ask:focus-visible { border-left-color: var(--accent); }
+  .ask .opt.cursor { border-color: var(--accent); background: #23414a; box-shadow: 0 0 0 1px var(--accent) inset; }
+  .ask .asknone { color: var(--dim); font-size: 12px; margin-top: 6px; }
+  .ask .askrow[hidden] { display: none; }
   .ask .askinput { margin-top: 8px; width: min(420px, 100%); box-sizing: border-box; background: #14181b; color: var(--fg); border: 1px solid #2c343a; padding: 6px 8px; font: inherit; border-radius: 3px; outline: none; }
   .ask .askinput:focus { border-color: var(--accent); }
   .ask .opt .hint { color: var(--dim); font-size: 12px; margin-left: 8px; }

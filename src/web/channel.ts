@@ -42,6 +42,9 @@ export class SessionChannel implements SessionUI {
   private pendingInput: ((s: string | UserInput) => void) | null = null;
   private inputQueue: (string | UserInput)[] = [];
   private exitRequested = false;
+  /** The slash command the session loop is working through, until it calls
+   * refresh(). Guards against a duplicate copy arriving in the meantime. */
+  private runningCommand: string | null = null;
   private pending = new Map<number, { resolve: (v: any) => void; kind: "confirm" | "select" | "prompt"; label: string }>();
   private askId = 0;
 
@@ -62,6 +65,7 @@ export class SessionChannel implements SessionUI {
   close(): void {
     this.closed = true;
     this.busyLabel = null;
+    this.runningCommand = null;
     this.resolvePending(null);
     this.host.changed(this.id);
   }
@@ -84,6 +88,13 @@ export class SessionChannel implements SessionUI {
     text = text.trim();
     if ((!text && !attachments.length) || this.closed) return;
     const input: string | UserInput = attachments.length ? { text, attachments } : text;
+    // /models and /effort take seconds to open (the backends are probed first),
+    // so a second click while the first is still queued or running used to
+    // queue a second copy — and that copy opened its picker the moment the
+    // first was answered, which reads as "the options never go away". One
+    // command of a kind at a time is what the user meant.
+    const cmd = commandOf(input);
+    if (cmd && (this.runningCommand === cmd || this.inputQueue.some((q) => commandOf(q) === cmd))) return;
     if (this.pendingInput) {
       const resolve = this.pendingInput;
       this.pendingInput = null;
@@ -104,6 +115,7 @@ export class SessionChannel implements SessionUI {
    * the turn. Without the first step a cancel during an approval prompt
    * would leave the agent waiting on a promise nothing will resolve. */
   cancel(): void {
+    this.runningCommand = null;
     this.resolvePending(null);
     this.onCancel?.();
   }
@@ -133,6 +145,7 @@ export class SessionChannel implements SessionUI {
 
   private accept(input: string | UserInput): void {
     const text = typeof input === "string" ? input : input.text;
+    this.runningCommand = commandOf(input);
     const files =
       typeof input === "string"
         ? []
@@ -176,6 +189,9 @@ export class SessionChannel implements SessionUI {
   }
 
   refresh(): void {
+    // The session loop calls this after every slash command, so the command it
+    // was running is over and a fresh copy of it is welcome.
+    this.runningCommand = null;
     this.pushState();
   }
 
@@ -297,6 +313,14 @@ export class SessionChannel implements SessionUI {
 /** Where the page fetches a stored upload (it appends its own key). */
 export function uploadUrl(sid: string, id: string): string {
   return `/upload?sid=${sid}&id=${id}`;
+}
+
+/** The slash command a queued/running message runs: "/Models foo" → "/models".
+ * Plain text (and anything with attachments) is not a command → null. */
+function commandOf(input: string | UserInput): string | null {
+  const text = (typeof input === "string" ? input : input.text).trim();
+  if (!text.startsWith("/")) return null;
+  return text.split(/\s+/)[0].toLowerCase();
 }
 
 export function stripAnsi(s: string): string {

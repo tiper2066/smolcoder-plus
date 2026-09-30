@@ -342,6 +342,27 @@ function renderPlan(v, p) {
 }
 
 // ---- event handling -------------------------------------------------------
+// A session can only be waiting on one question at a time, so a picker arriving
+// while an older box of the same kind is still on screen means that box is
+// stale — answered elsewhere, replayed, or superseded. Close it here: a box the
+// user cannot get rid of looks like their choice never took effect.
+function closeAsk(v, kind) {
+  for (const [id, box] of [...v.asks]) {
+    if (box._ask !== kind) continue;
+    box.remove();
+    v.asks.delete(id);
+  }
+}
+// Every question lands in the chat, and a full-width panel hides the chat
+// entirely (the body.panel-full rule in styles.ts sets display:none on
+// #main) — so the box would sit there at zero height, with no button to
+// click. Any kind of ask needs the chat back before it is added, not just
+// an approval.
+function revealChat(v) {
+  if (v !== active || !v.panelFull) return;
+  v.panelFull = false;
+  renderPanel();
+}
 function handle(m) {
   if (m.t === "hub") { onHub(m); return; }
   if (m.t === "closed") { dropView(m.sid); return; }
@@ -392,6 +413,7 @@ function handle(m) {
     case "confirm": {
       endThought(v); v.curText = null;
       const box = el("div", "ask");
+      box._ask = "confirm";
       box.appendChild(el("div", "", "run?")); box.appendChild(el("div", "cmd", m.command));
       if (m.reason) box.appendChild(el("div", "hint", m.reason));
       ["yes", "no", "always"].forEach((a) => {
@@ -402,7 +424,7 @@ function handle(m) {
       v.asks.set(m.id, box);
       // An approval needs the user's eyes. If the panel is eating the whole
       // screen, drop it back so the chat (home of this box) shows.
-      if (v === active && v.panelFull) { v.panelFull = false; renderPanel(); }
+      revealChat(v);
       add(v, box); break;
     }
     case "answered": {
@@ -413,23 +435,101 @@ function handle(m) {
     }
     case "select": {
       endThought(v); v.curText = null;
+      closeAsk(v, "select");
       const box = el("div", "ask");
+      box._ask = "select";
+      // The box takes focus so it, not the composer, sees the keys. Without
+      // this the arrows belong to the textarea and the picker looks dead.
+      box.tabIndex = 0;
       box.appendChild(el("div", "cmd", m.title));
-      m.options.forEach((o, i) => {
+      const opts = m.options.slice();
+      const rows = [];
+      const answer = (index) => { post("/select", { sid: v.sid, id: m.id, index: index }); box.remove(); };
+      opts.forEach((o, i) => {
         const b = el("button", "opt" + (o.current ? " current" : ""), (o.current ? "● " : "") + o.label);
         if (o.hint) b.appendChild(el("span", "hint", o.hint));
-        b.onclick = () => { post("/select", { sid: v.sid, id: m.id, index: i }); box.remove(); };
-        box.appendChild(el("div")).appendChild(b);
+        b.onclick = () => answer(i);
+        const row = el("div", "askrow");
+        row.appendChild(b);
+        box.appendChild(row);
+        rows.push({ row: row, btn: b, o: o, i: i });
       });
       const cancel = el("button", "", "cancel");
-      cancel.onclick = () => { post("/select", { sid: v.sid, id: m.id, index: null }); box.remove(); };
+      cancel.onclick = () => answer(null);
       box.appendChild(cancel);
+      const none = el("div", "asknone", "no matches");
+      box.appendChild(none);
+      const foot = el("div", "hint", "↑↓ move · type to filter · enter select · esc cancel");
+      box.appendChild(foot);
+      // Cursor and filter live on the box so a key handler anywhere can read
+      // them, and so the highlight survives a re-render of the log.
+      box._sel = { idx: 0, filter: "" };
+      const shown = () => {
+        const f = box._sel.filter.toLowerCase();
+        return f ? rows.filter((r) => r.o.label.toLowerCase().includes(f)) : rows;
+      };
+      const paint = () => {
+        const vis = shown();
+        rows.forEach((r) => { r.row.hidden = vis.indexOf(r) < 0; });
+        // Keep the cursor on a row the user can actually see.
+        if (box._sel.idx >= vis.length) box._sel.idx = Math.max(0, vis.length - 1);
+        // Clear every row first: a filter can hide the row that had the cursor,
+        // and a stale class on a hidden row is what the user sees when the
+        // filter is cleared again.
+        rows.forEach((r) => r.btn.classList.remove("cursor"));
+        vis.forEach((r, n) => r.btn.classList.toggle("cursor", n === box._sel.idx));
+        none.hidden = vis.length > 0;
+        const cur = vis[box._sel.idx];
+        // scrollIntoView on the wrapper, not the button: the button is inline
+        // inside it, and the wrapper is the block box the log scrolls.
+        if (cur) cur.row.scrollIntoView({ block: "nearest" });
+      };
+      box.onkeydown = (e) => {
+        const vis = shown();
+        const key = e.key;
+        if (key === "ArrowDown" || (key === "Tab" && !e.shiftKey)) {
+          e.preventDefault();
+          if (vis.length) box._sel.idx = (box._sel.idx + 1) % vis.length;
+        } else if (key === "ArrowUp" || (key === "Tab" && e.shiftKey)) {
+          e.preventDefault();
+          if (vis.length) box._sel.idx = (box._sel.idx - 1 + vis.length) % vis.length;
+        } else if (key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();     // the composer's Enter must not send a message
+          const cur = vis[box._sel.idx];
+          answer(cur ? cur.i : null);
+          return;
+        } else if (key === "Escape") {
+          // Cancel this box only. The page-level handler would abort the turn.
+          e.preventDefault();
+          e.stopPropagation();
+          answer(null);
+          return;
+        } else if (key === "Backspace") {
+          e.preventDefault();
+          box._sel.filter = box._sel.filter.slice(0, -1);
+          box._sel.idx = 0;
+        } else if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          box._sel.filter += key;
+          box._sel.idx = 0;
+        } else {
+          return;
+        }
+        paint();
+      };
       v.asks.set(m.id, box);
-      add(v, box); break;
+      revealChat(v);
+      paint();
+      add(v, box);
+      if (v === active) box.focus();
+      break;
     }
     case "prompt": {
       endThought(v); v.curText = null;
+      closeAsk(v, "prompt");
       const box = el("div", "ask");
+      box._ask = "prompt";
       box.appendChild(el("div", "cmd", m.title));
       const field = el("input", "askinput"); field.type = "text"; field.placeholder = m.placeholder || ""; field.spellcheck = false; field.autocomplete = "off";
       const send = (value) => { post("/prompt", { sid: v.sid, id: m.id, value: value }); box.remove(); };
@@ -442,6 +542,7 @@ function handle(m) {
       const ok = el("button", "", "ok"); ok.onclick = () => send(field.value.trim() || null); box.appendChild(ok);
       const cancel = el("button", "", "cancel"); cancel.onclick = () => send(null); box.appendChild(cancel);
       v.asks.set(m.id, box);
+      revealChat(v);
       add(v, box);
       if (v === active) field.focus();
       break;

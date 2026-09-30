@@ -48,15 +48,134 @@ test("web: every element the client looks up by id exists in the page", () => {
   assert.deepEqual(missing, [], `client.ts looks up ids the page does not define: ${missing.join(", ")}`);
 });
 
-test("web: an approval in full-screen drops the panel back so the chat shows", () => {
-  // The confirm handler must bail out of full-screen when an approval box is
-  // added, otherwise the user never sees the "run?" prompt behind the panel.
-  assert.ok(/case "confirm"/.test(CLIENT_JS), "the confirm handler is present");
-  // Confirm the handler is followed by the bail-out (not just the answered case).
-  const idx = CLIENT_JS.indexOf('case "confirm"');
-  const tail = CLIENT_JS.slice(idx, CLIENT_JS.indexOf('case "answered"'));
-  assert.match(tail, /panelFull\s*=\s*false/, "clears full-screen on confirm");
-  assert.ok(/v === active/.test(tail), "only when this session is the focused one");
+test("web: every question drops the panel out of full width so the chat shows", () => {
+  // Regression: only the approval handler bailed out of full width. A picker
+  // (/models, /effort) or a text prompt went into the chat, which
+  // `body.panel-full #main { display: none }` had already taken off screen —
+  // the box was in the DOM at zero height, so its buttons could not be
+  // clicked and the options looked like they never appeared.
+  const fn = CLIENT_JS.slice(CLIENT_JS.indexOf("function revealChat"), CLIENT_JS.indexOf("function handle(m)"));
+  assert.match(fn, /v !== active/, "only the session the user is looking at");
+  assert.match(fn, /v\.panelFull = false/, "full width is dropped");
+  assert.match(fn, /renderPanel\(\)/, "and the panel is re-rendered");
+
+  // Every kind of ask goes through it, and each one adds its box to the chat.
+  for (const kind of ["confirm", "select", "prompt"]) {
+    const idx = CLIENT_JS.indexOf(`case "${kind}"`);
+    assert.ok(idx > 0, `the ${kind} handler is present`);
+    const tail = CLIENT_JS.slice(idx, CLIENT_JS.indexOf("break;", idx));
+    assert.match(tail, /revealChat\(v\)/, `${kind} reveals the chat before adding its box`);
+    // It has to happen before the box is appended, not after.
+    assert.ok(
+      tail.indexOf("revealChat(v)") < tail.indexOf("add(v, box)"),
+      `${kind} reveals the chat before the box joins the transcript`
+    );
+  }
+  // The ask handlers must not each grow their own copy of the bail-out.
+  assert.equal(
+    [...CLIENT_JS.matchAll(/panelFull = false/g)].length,
+    1,
+    "the full-width bail-out lives in revealChat only"
+  );
+});
+
+test("web: a new picker closes the stale one, so options always go away", () => {
+  // Regression: a session waiting on a picker could end up with two boxes on
+  // screen (a duplicate command, or a replay). Only the newest one is live, so
+  // a box the user cannot dismiss reads as "my choice did not take effect".
+  assert.match(CLIENT_JS, /function closeAsk\(v, kind\)/, "there is one place that drops a stale ask box");
+  const close = CLIENT_JS.slice(CLIENT_JS.indexOf("function closeAsk"), CLIENT_JS.indexOf("function handle(m)"));
+  assert.match(close, /box\._ask !== kind/, "only boxes of the same kind are closed");
+  assert.match(close, /box\.remove\(\)/, "the stale box leaves the transcript");
+  assert.match(close, /v\.asks\.delete\(id\)/, "and stops being the live ask for that id");
+  for (const kind of ["select", "prompt", "confirm"]) {
+    const idx = CLIENT_JS.indexOf(`case "${kind}"`);
+    const tail = CLIENT_JS.slice(idx, CLIENT_JS.indexOf("break;", idx));
+    assert.match(tail, /box\._ask = "([a-z]+)"/, `the ${kind} box is tagged with its kind`);
+  }
+  const sel = CLIENT_JS.slice(CLIENT_JS.indexOf('case "select"'), CLIENT_JS.indexOf('case "prompt"'));
+  assert.match(sel, /closeAsk\(v, "select"\)/, "a new select closes the previous one");
+  // The approvals are the one kind that can legitimately stack up, so they are
+  // not swept by another picker arriving.
+  assert.ok(!/closeAsk\(v, "confirm"\)/.test(CLIENT_JS), "approvals are never closed by a picker");
+});
+
+test("web: a picker is driven by the keyboard, like the terminal one", () => {
+  // Regression: the web picker had nothing but per-button onclick handlers, so
+  // the arrow keys did nothing there while the TUI has had ↑↓/filter/enter since
+  // the beginning. It read as "the options will not respond".
+  const sel = CLIENT_JS.slice(CLIENT_JS.indexOf('case "select"'), CLIENT_JS.indexOf('case "prompt"'));
+
+  // The box has to take focus, or the keys belong to the composer textarea.
+  assert.match(sel, /box\.tabIndex = 0/, "the picker is focusable");
+  assert.match(sel, /if \(v === active\) box\.focus\(\)/, "and it is focused when it opens");
+  // Exactly one focus call, and it is the guarded one — a picker opening in a
+  // background session must not steal focus from the session being read.
+  assert.equal([...sel.matchAll(/box\.focus\(\)/g)].length, 1, "focus is called once, inside the active-session guard");
+
+  // The keys the terminal picker answers to.
+  const keys = CLIENT_JS.slice(CLIENT_JS.indexOf("box.onkeydown"), CLIENT_JS.indexOf('case "prompt":'));
+  assert.match(keys, /ArrowDown/, "down moves");
+  assert.match(keys, /ArrowUp/, "up moves");
+  assert.match(keys, /key === "Tab"/, "tab moves too");
+  assert.match(keys, /key === "Enter"/, "enter selects");
+  assert.match(keys, /key === "Escape"/, "escape cancels");
+  assert.match(keys, /key === "Backspace"/, "backspace edits the filter");
+  assert.match(keys, /key\.length === 1/, "typing filters");
+  // Wrap-around at both ends, as keySelect does in the TUI.
+  assert.match(keys, /\(box\._sel\.idx \+ 1\) % vis\.length/, "down wraps");
+  assert.match(keys, /\(box\._sel\.idx - 1 \+ vis\.length\) % vis\.length/, "up wraps");
+
+  // Enter and Escape must not reach the page-level handlers: Enter would send a
+  // message from the composer, Escape would abort the whole turn.
+  const enter = keys.slice(keys.indexOf('key === "Enter"'), keys.indexOf('key === "Escape"'));
+  assert.match(enter, /e\.preventDefault\(\)/, "enter is swallowed");
+  assert.match(enter, /e\.stopPropagation\(\)/, "and does not reach the composer");
+  const esc = keys.slice(keys.indexOf('key === "Escape"'), keys.indexOf('key === "Backspace"'));
+  assert.match(esc, /e\.stopPropagation\(\)/, "escape does not abort the turn");
+  assert.match(esc, /answer\(null\)/, "escape cancels the picker");
+
+  // The index sent must be the option's own, not its position in the filtered
+  // list — that is how a wrong index gets chosen after typing a filter.
+  assert.match(sel, /rows\.push\(\{ row: row, btn: b, o: o, i: i \}\)/, "each row remembers its real index");
+  assert.match(keys, /const cur = vis\[box\._sel\.idx\];\s*\n\s*answer\(cur \? cur\.i : null\)/, "enter sends the row's own index");
+  assert.match(sel, /o\.label\.toLowerCase\(\)\.includes\(f\)/, "the filter matches labels");
+
+  // A stale cursor class on a hidden row is what the user sees after clearing
+  // a filter, so every row is cleared before one is marked.
+  const paint = CLIENT_JS.slice(CLIENT_JS.indexOf("const paint = ()"), CLIENT_JS.indexOf("box.onkeydown"));
+  assert.match(paint, /rows\.forEach\(\(r\) => r\.btn\.classList\.remove\("cursor"\)\)/, "the cursor is cleared everywhere first");
+  assert.match(paint, /r\.row\.hidden = vis\.indexOf\(r\) < 0/, "non-matching rows are hidden");
+  assert.match(paint, /none\.hidden = vis\.length > 0/, "an empty result says so");
+
+  // Mouse stays: the keyboard is an addition.
+  assert.match(sel, /b\.onclick = \(\) => answer\(i\)/, "clicking an option still answers");
+  assert.match(sel, /cancel\.onclick = \(\) => answer\(null\)/, "and the cancel button still cancels");
+
+  const { STYLES } = require("../dist/web/styles");
+  assert.match(STYLES, /\.ask \.opt\.cursor \{/, "the cursor row is styled");
+  assert.match(STYLES, /\.ask \.askrow\[hidden\] \{ display: none; \}/, "a hidden row leaves the layout");
+});
+
+test("web: the terminal picker and the web picker answer the same keys", () => {
+  // The two UIs share one SessionUI contract, so a key one of them supports and
+  // the other does not is a defect the user feels as "the web UI is worse".
+  const fs2 = require("fs");
+  const tui = fs2.readFileSync(path.join(__dirname, "..", "src", "tui", "tui.ts"), "utf8");
+  const keySelect = tui.slice(tui.indexOf("private keySelect"), tui.indexOf("private endSelect"));
+  for (const [name, re] of [
+    ["up", /case "up"/],
+    ["down", /case "down"/],
+    ["tab", /case "tab"/],
+    ["enter", /case "enter"/],
+    ["escape", /case "esc"/],
+    ["filter text", /case "text"/],
+    ["backspace", /case "backspace"/],
+  ]) {
+    assert.match(keySelect, re, `the terminal picker handles ${name}`);
+  }
+  assert.match(keySelect, /\(s\.index - 1 \+ filtered\.length\) % filtered\.length/, "and wraps at the top");
+  assert.match(keySelect, /s\.options\.indexOf\(/, "and sends the option's real index, not the filtered position");
 });
 
 test("web: the sidebar tab switch matches .side-tab and hides the other panel", () => {
@@ -134,6 +253,40 @@ test("channel: a message resolves readInput, is echoed with the session id, and 
   assert.deepEqual({ t: user.t, s: user.s, sid: user.sid }, { t: "user", s: "build the game", sid: "s1" });
   assert.ok(ch.replay.some((e) => e.t === "user"), "user events are replayed");
   assert.ok(!ch.replay.some((e) => e.t === "state"), "state events are not replayed");
+});
+
+test("channel: a repeated slash command is dropped while the first is queued or running", async () => {
+  // Regression: /models and /effort take seconds to open their picker (the
+  // backends are probed first), so clicking twice queued the command twice.
+  // The second copy opened its picker right after the first was answered, so
+  // the options never seemed to go away.
+  const { ch, sent } = makeChannel();
+  const p = ch.readInput();
+  ch.handleMessage("/models");
+  ch.handleMessage("/models");
+  ch.handleMessage("/effort");
+  ch.handleMessage("build the thing");
+  assert.equal(await p, "/models");
+  assert.equal(await ch.readInput(), "/effort", "a different command still queues");
+  assert.equal(await ch.readInput(), "build the thing");
+
+  // Same while the command is running with its picker open.
+  const { ch: c2, sent: sent2 } = makeChannel("s2");
+  const p2 = c2.readInput();
+  c2.handleMessage("/models");
+  assert.equal(await p2, "/models");
+  const picker = c2.select("Select model", [{ label: "m1" }, { label: "m2" }]);
+  c2.handleMessage("/Models"); // same command, different case
+  c2.handleAnswer(sent2.filter((e) => e.t === "select").pop().id, 1);
+  assert.equal(await picker, 1);
+  c2.refresh(); // the session loop ends the command here
+  c2.handleMessage("next");
+  assert.equal(await c2.readInput(), "next", "the duplicate never reached the queue");
+
+  // Once the command is over the same one is welcome again.
+  c2.handleMessage("/models");
+  assert.equal(await c2.readInput(), "/models");
+  assert.ok(sent.some((e) => e.t === "user" && e.s === "/models"), "the first copy is still echoed");
 });
 
 test("channel: messages sent while busy queue up and a slash command does not become the title", async () => {
