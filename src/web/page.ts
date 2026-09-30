@@ -14,6 +14,9 @@ const ICON_BROWSER =
 const ICON_TERMINAL =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
 
+const ICON_FILE =
+  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+
 const ICON_ATTACH =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 
@@ -51,6 +54,7 @@ export const PAGE_HTML = `<!doctype html>
     <div id="crumb"></div>
     <button class="iconbtn" id="btnbrowser" title="browser panel: preview a dev server next to the chat">${ICON_BROWSER}</button>
     <button class="iconbtn" id="btnterm" title="terminal panel (ctrl+\`)">${ICON_TERMINAL}</button>
+    <button class="iconbtn" id="btnfiles" title="file editor: open a workspace file next to the chat">${ICON_FILE}</button>
   </div>
   <div id="logwrap" tabindex="0" role="region" aria-label="Session messages">
     <div id="welcome" hidden>
@@ -80,7 +84,12 @@ export const PAGE_HTML = `<!doctype html>
 </div>
 <div id="panel" hidden>
   <div id="panelgrip" title="drag to resize"></div>
-  <div id="paneltabs"><button class="iconbtn" id="panelfull" title="toggle full-width panel (ctrl+shift+b)">⛶</button></div>
+  <!-- #paneltabs is emptied and rebuilt by renderPanel, so nothing static may
+       live inside it — #panelfull is a sibling, not a child. -->
+  <div id="panelbar">
+    <div id="paneltabs"></div>
+    <button class="iconbtn" id="panelfull" title="toggle full-width panel (ctrl+shift+b)">⛶</button>
+  </div>
   <div id="panelviews"></div>
 </div>
 <div id="modal" hidden>

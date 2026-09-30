@@ -19,9 +19,10 @@ import { DATA_DIR, loadConfig } from "../config";
 import { noBackendsMessage, prepareModel, Session, SessionPrefs, SessionSnapshot, setupWithoutLocalModels } from "../session";
 import { tryFetchJson } from "../util";
 import { Attachment, classifyUpload, extOf, MAX_UPLOAD_BYTES, mimeForExt, safeName } from "../attachments";
+import { resolveInWorkspace, relPath } from "../sandbox";
 import { Event, SessionChannel, uploadUrl } from "./channel";
 import { PAGE_HTML } from "./page";
-import { SessionMeta, SessionStore, WorkspaceStore, workspaceKey } from "./store";
+import { SessionMeta, SessionStore, WorkspaceStore, workspaceKey, writeAtomic } from "./store";
 import { Terminal } from "./terminal";
 
 export type SessionFactory = (ui: SessionChannel, workspace: string, prefs: SessionPrefs) => Promise<Session>;
@@ -228,6 +229,90 @@ export function browseDir(input: string | null | undefined): Record<string, any>
     });
   const parent = path.dirname(target);
   return { ...base, parent: parent === target ? null : parent, dirs, project: isProject(target) };
+}
+
+// ---- file read/write for the editor panel -----------------------------------
+// Pure functions (no hub state) so the rules can be tested without HTTP. Both
+// refuse anything that leaves the workspace, including via a symlink.
+
+/** Enough for any source file. Past this the tab shows a truncated head. */
+export const FILE_READ_CAP = 512 * 1024;
+/** Ceiling on a POST body. The editor is the only route that sends file
+ * content, and JSON escaping can roughly double it. */
+const FILE_POST_CAP = 4 * 1024 * 1024;
+
+/** Read one workspace file for the editor. Returns `{ error }` instead of
+ * throwing so the route can map each failure to its own status code. */
+export function readFsFile(root: string, rel: string, maxBytes = FILE_READ_CAP): Record<string, any> {
+  let abs: string;
+  try {
+    abs = resolveInWorkspace(root, rel);
+  } catch (err: any) {
+    return { forbidden: true, error: String(err?.message ?? err) };
+  }
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(abs);
+  } catch {
+    return { notFound: true, error: `"${rel}" no longer exists. It may have been deleted or renamed.` };
+  }
+  if (st.isDirectory()) return { badTarget: true, error: `"${rel}" is a folder, not a file.` };
+  const base = { rel: relPath(root, abs), mtimeMs: st.mtimeMs, size: st.size };
+  // Extension guessing gets this wrong in both directions (a .ts file full of
+  // escapes, a binary with no extension). A NUL byte in the head does not.
+  const want = Math.min(maxBytes, st.size);
+  const buf = Buffer.alloc(want);
+  let fd: number | null = null;
+  let got = 0;
+  try {
+    fd = fs.openSync(abs, "r");
+    got = fs.readSync(fd, buf, 0, want, 0);
+  } catch (err: any) {
+    return { error: `cannot read "${rel}": ${err?.message ?? err}` };
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd); } catch { /* already closed */ }
+  }
+  const bytes = buf.subarray(0, got);
+  if (bytes.includes(0)) return { ...base, binary: true };
+  const truncated = st.size > maxBytes;
+  return { ...base, binary: false, content: bytes.toString("utf8"), truncated, truncatedBytes: truncated ? st.size - maxBytes : 0 };
+}
+
+/** Overwrite one workspace file. `mtimeMs` is the value the editor last saw;
+ * when the file moved on since, nothing is written and the caller is told what
+ * is on disk so the user can choose. */
+export function writeFsFile(root: string, rel: string, content: unknown, mtimeMs?: number | null): Record<string, any> {
+  if (typeof content !== "string") return { badTarget: true, error: "content must be a string." };
+  let abs: string;
+  try {
+    abs = resolveInWorkspace(root, rel);
+  } catch (err: any) {
+    return { forbidden: true, error: String(err?.message ?? err) };
+  }
+  let st: fs.Stats | null = null;
+  try {
+    st = fs.statSync(abs);
+  } catch {
+    /* a new file — nothing to conflict with */
+  }
+  if (st && st.isDirectory()) return { badTarget: true, error: `"${rel}" is a folder, not a file.` };
+  if (st && typeof mtimeMs === "number" && Math.abs(st.mtimeMs - mtimeMs) > 1) {
+    return {
+      conflict: true,
+      error: `"${rel}" changed on disk since you opened it.`,
+      mtimeMs: st.mtimeMs,
+      size: st.size,
+      serverContent: fs.readFileSync(abs, "utf8"),
+    };
+  }
+  try {
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    writeAtomic(abs, content);
+  } catch (err: any) {
+    return { error: `cannot write "${rel}": ${err?.message ?? err}` };
+  }
+  const after = fs.statSync(abs);
+  return { ok: true, rel: relPath(root, abs), mtimeMs: after.mtimeMs, size: after.size };
 }
 
 function defaultFactory(help: string): SessionFactory {
@@ -468,6 +553,39 @@ export class WebHub {
     live.channel.pushState();
     this.changed();
     this.scheduleSave(live);
+  }
+
+  /** The session's permission mode, or null when it cannot be told (the
+   * session has not started yet, or a host supplied a stand-in). */
+  private modeOf(live: Live): string | null {
+    const m = (live.session as any)?.agent?.mode;
+    return typeof m === "string" ? m : null;
+  }
+
+  /** Map a readFsFile result onto the status code that describes it. */
+  private fsFileStatus(r: Record<string, any>): [number, Record<string, any>] {
+    if (r.forbidden) return [403, r];
+    if (r.notFound) return [404, r];
+    if (r.badTarget) return [400, r];
+    return [200, r];
+  }
+
+  /** The editor's save. Answers with a status the client can branch on. */
+  private saveWorkspaceFile(data: any): [number, Record<string, any>] {
+    const sid = String(data?.sid ?? "");
+    const live = SESSION_ID_RE.test(sid) ? this.live.get(sid) : undefined;
+    if (!live) return [403, { error: "unknown session" }];
+    const mode = this.modeOf(live);
+    // Only a positively read-only session is refused. An unknown mode means the
+    // session has not started; the real gate is that buildToolSpecs("ro") never
+    // hands the agent a write tool in the first place.
+    if (mode === "ro") return [403, { error: "This session is read-only. Start an edit-mode session to save files.", mode }];
+    const r = writeFsFile(live.workspace, String(data?.path ?? ""), data?.content, data?.mtimeMs);
+    if (r.forbidden) return [403, { ...r, mode }];
+    if (r.conflict) return [409, { ...r, mode }];
+    if (r.badTarget) return [400, { ...r, mode }];
+    if (r.error) return [500, { ...r, mode }];
+    return [200, { ...r, mode }];
   }
 
   /** Build the workspace directory tree for the sidebar file tree. */
@@ -761,6 +879,16 @@ export class WebHub {
           json(200, { ok: true, tree });
           return;
         }
+        case "/fs/file": {
+          const sid = String(url.searchParams.get("sid") ?? "");
+          const live = SESSION_ID_RE.test(sid) ? this.live.get(sid) : undefined;
+          // A file read is never answered for a session we do not know: unlike
+          // the tree, a silent null here would look like "the file is empty".
+          if (!live) { json(403, { error: "unknown session" }); return; }
+          const rel = String(url.searchParams.get("path") ?? "");
+          json(...this.fsFileStatus(readFsFile(live.workspace, rel)));
+          return;
+        }
         case "/upload":
           this.serveUpload(res, url);
           return;
@@ -776,11 +904,17 @@ export class WebHub {
         return;
       }
       let body = "";
+      let tooBig = false;
       req.on("data", (d) => {
+        if (tooBig) return;
         body += d;
-        if (body.length > 1_000_000) req.destroy();
+        // Big enough for a 512KB file the editor may save, whose JSON escapes
+        // can double the size. Answering is better than destroying the socket,
+        // which the browser would report as an unexplained network failure.
+        if (body.length > FILE_POST_CAP) { tooBig = true; body = ""; }
       });
       req.on("end", () => {
+        if (tooBig) { json(413, { error: "That file is too large to save from the editor." }); return; }
         let data: any = {};
         try {
           data = body ? JSON.parse(body) : {};
@@ -788,6 +922,14 @@ export class WebHub {
           /* ignore */
         }
         try {
+          // A file save has to answer with a status the editor can act on
+          // (403 read-only, 409 changed underneath), so it does not go
+          // through handlePost's flat 200-with-{error} contract.
+          if (url.pathname === "/fs/file") {
+            const [code, out] = this.saveWorkspaceFile(data);
+            json(code, out);
+            return;
+          }
           json(200, this.handlePost(url.pathname, data) ?? {});
         } catch (err: any) {
           json(400, { error: String(err?.message ?? err) });

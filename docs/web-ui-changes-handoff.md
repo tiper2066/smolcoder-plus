@@ -2,7 +2,7 @@
 
 **작성자:** smolcoder
 **작성일:** 2026-09-23
-**최종 업데이트:** 2026-09-30 (파일 트리 단계 1-B 완료 — 탭 전환·트리 렌더·dot 파일·아이콘 크기 반영)
+**최종 업데이트:** 2026-09-30 (단계 2-A/2-B 완료 — 파일 읽기/쓰기 API + File Edit 패널)
 **프로젝트:** smolcoder-plus v1.0.6 (전역 bin: `smolp` / `smolcoder-plus`)
 **관련 계획서:** `docs/IMPLEMENTATION-PLAN-web-search-integration.md`, `docs/IMPLEMENTATION-PLAN-global-install.md`, `docs/handoff.md`
 
@@ -15,22 +15,28 @@
 
 **목표:** `smolp --web` Web UI에 두 가지 기능 추가.
 
-1. **파일 트리** — 좌측 사이드바에 "세션 / 파일" 탭을 두고 워크스페이스 파일 트리 표시. 파일 클릭 시 composer에 경로 삽입(MVP) 또는 편집기에서 열기.
+1. **파일 트리** — 좌측 사이드바에 "세션 / 파일" 탭을 두고 워크스페이스 파일 트리 표시. 파일 클릭은 에디터로 열고, 행 hover 의 `＋` 는 composer 에 경로를 넣는다.
 2. **File Edit 패널** — 우상단 panel에 `file` kind 탭을 추가해 파일을 보고 편집·저장.
-3. **패널 전체화면 토글** — `⤢` 버튼 한 번으로 패널을 좌측 사이드바만 남는 전체 폭으로 확장. 좁은 기본 폭(최대 60%) 때문에 생기는 불편을 먼저 해소하는 선행 작업(단계 1-C).
+3. **패널 전체화면 토글** — `⛶` 버튼 한 번으로 패널을 좌측 사이드바만 남는 전체 폭으로 확장. 좁은 기본 폭(최대 60%) 때문에 생기는 불편을 먼저 해소하는 선행 작업(단계 1-C).
 
-**현재 상태: 1(파일 트리)과 3(패널 전체화면)은 완료·검증됨, 2(File Edit 패널)는 미개시.** 2에 필요한 파일 읽기/쓰기 API는 아직 없다(§1.3).
+**현재 상태: 1·2·3 모두 완료·검증됨.** 파일 트리(1-B) · File Edit 패널(2-A/2-B) · 패널 전체화면(1-C).
 
 | 단계 | 상태 | 검증 |
 |---|---|---|
 | 0 groundwork (`client.ts` 구문 안전망) | ✅ | `npm test` |
 | 1-A `/fs/tree` API | ✅ | `hub: /fs/tree …` |
 | **1-B 사이드바 탭 + 파일 트리** | ✅ **2026-09-30 완료** | headless Chrome 실측 + 회귀 테스트 4개 |
-| 1-C 패널 전체화면 | ✅ | 회귀 테스트 1개 |
-| 2-A 파일 읽기/쓰기 API | ❌ 미개시 | — |
-| 2-B File Edit 패널 | ❌ 미개시 | — |
+| **1-C 패널 전체화면** | ✅ **2026-09-30 수정 완료** | 회귀 테스트 1개 + 1440/820px 실측 |
+| **2-A 파일 읽기/쓰기 API** | ✅ **2026-09-30 완료** | 5개 테스트 + headless 실측 |
+| **2-B File Edit 패널** | ✅ **2026-09-30 완료** | 번들 테스트 2개 + headless 실측 |
 
-**다음 세션이 할 일:** 2-A → 2-B. 그 전에 §"이번 세션에서 고친 것"의 표를 읽어 같은 실수를 반복하지 말 것.
+**남은 일:** 없다. 다음 작업 전에는 아래 세 가지를 반드시 읽을 것 —
+1. §"이 기능을 처음 만졌다면" — 파일 트리 함정 4가지 (`post` 로 `/fs/tree` 부르기, `state.workspace` 신뢰, 상대경로 재추측, "정상 경로"만 검증)
+2. §"이 단계에서 발견한 기존 회귀" — `#paneltabs` 안의 정적 요소, 그리고 **문서와 코드가 다르면 코드를 먼저 고쳐 읽을 것**
+3. §"File Edit 패널" 의 규칙 — **열 수 없는 파일은 탭을 만들지 않는다** / **이미 열린 탭은 절대 자동 닫지 않는다**(저장 안 한 편집 보호)
+
+**사용법:** 트리에서 파일을 **클릭**하면 에디터가 열린다. `Ctrl/Cmd+S` 또는 `💾` 로 저장한다.
+에이전트에게 그 파일을 알려주려면 행에 마우스를 올려 나타나는 `＋` 를 누른다(Alt+클릭도 동일).
 
 ---
 
@@ -322,10 +328,19 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
   body.panel-full #panel       { flex: 1 1 auto; width: auto !important; max-width: none; }
   body.panel-full #panelgrip   { display: none; }  /* 전체화면 중에는 드래그 불가 */
   ```
-  - `!important`가 필요한 이유: `client.ts:663`이 inline `style.width`를 박기 때문. `styles.ts:329`의 좁은 화면 오버레이 규칙(`width: 100% !important`)가 같은 이유로 이미 이 패턴을 쓴다 — **그 precedent를 그대로 따라간다**
+  - `!important`가 필요한 이유: `client.ts` `renderPanel()` 이 inline `style.width`를 박기 때문. 좁은 화면 오버레이 규칙(`width: 100% !important`)이 같은 이유로 이미 이 패턴을 쓴다 — **그 precedent를 그대로 따라간다**
   - 사이드바(`#side`, `flex: none`)는 남아 있으므로 "좌측 사이드바를 제외한 전체화면"이 된다
+  - ⚠️ **2026-09-30 수정 — 위 규칙이 실제 코드와 달랐다.** 구현돼 있던 것은
+    `position: absolute; inset: 48px 0 0; width: var(--fw-panel, 60%); max-width: 85%; z-index: 15` 였다.
+    즉 (1) 전체화면이 아니라 **기존 폭 그대로**였고, (2) absolute + z-index 로 **채팅 위에 겹쳐** 하단 composer 를 가렸고,
+    (3) `inset: 48px 0 0` 은 `#top` 실제 높이(40/60px, 좁으면 48px)와 어긋나는 **하드코딩**이었다.
+    → 본문에 적힌 대로 `display:none` + `flex: 1 1 auto` + `width: auto !important` 로 되돌리고
+    `--fw-panel` 변수를 제거했다(그 변수는 깨진 폭을 먹여줄 뿐이었다). 좁은 화면은 여전히 absolute 규칙을 쓰므로
+    그 경우만 `@media` 안에서 `width: 100% !important` 로 다시 선언한다. `#panelgrip` 도 전체화면 중에는 숨긴다
+    - 회귀 테스트: "web: full-width panel takes the whole row instead of overlaying the chat"
+    - 실측(1440px): 일반 520px@x=920 → 전체화면 **1192px@x=248**(사이드바 바로 옆, `#main`·composer 숨김, grip 숨김) → 복귀 520px@x=920. 820px 좁은 화면: 820px 전체
 - [x] `client.ts` `renderPanel()`(client.ts:788) 안에서 `document.body.classList.toggle("panel-full", v.panelFull)` — `renderPanel()`은 세션 전환·탭 전환마다 이미 호출되므로 별도 sites 없음
-- [x] 토글 버튼: `#paneltabs`의 `+◎` / `+>_` / `»` 버튼 옆(`client.ts:678-682`)에 `⤢` 아이콘 버튼 `#panelfull` 추가. `renderPanel()`(client.ts:790) 가 `on` 클래스 토글, 핸들러(client.ts:687-693) 가 `active.panelFull` 토글 + `renderPanel()`
+- [x] 토글 버튼: `#paneltabs`의 `+◎` / `+>_` / `»` 버튼 옆(`client.ts:678-682`)에 `⛶` 아이콘 버튼 `#panelfull` 추가. `renderPanel()`(client.ts:790) 가 `on` 클래스 토글, 핸들러(client.ts:687-693) 가 `active.panelFull` 토글 + `renderPanel()`
 - [x] 상태 영속화: `v.panelFull`(세션별) → `savePanel()`(client.ts:756) JSON 에 `full: v.panelFull` 추가, `loadPanelState()`(client.ts:768) 에서 복원
 - [x] **승인 요청 시 자동 해제 (MUST)** — **구현 완료 (client.ts:396)**
   - 에이전트 승인 박스는 `client.ts:389` `case "confirm"` 에서 `#logs` 안에 렌됨 (`el("div", "ask")`)
@@ -336,31 +351,109 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 - [x] 단축키: `Ctrl+Shift+b` (client.ts:696). 기존 `Ctrl+B` 사이드바 / ``Ctrl+` `` 터미널 패턴 (`client.ts:989-994`)과 동일
 - [x] 좁은 화면(`narrow()`, client.ts:996)에서 토글 동작 — 사이드바를 `position: fixed; width: 280px; z-index: 20` 으로 chat 위에 오버레이, `#panel` 은 `!important` 로 방어
 - [x] 전체화면 ↔ 일반 전환 시 폭 복원 — toggle 이 inline width 를 지우면 CSS 기본 520px 로 돌아가므로, 복귀 시 `renderPanel()`(client.ts:787) 이 clamp(`pw = Math.min(Math.max(innerWidth * 0.8, 320), ...)` ) 를 다시 적용
-- [x] 검증: `⤢` 클릭 → 좌측 사이드바만 남고 패널이 전체 폭 → 드래그 grip 사라짐 (`styles.ts` `body.panel-full #panelgrip { display: none }`) → 토글로 복귀 + 폭 유지
+- [x] 검증: `⛶` 클릭 → 좌측 사이드바만 남고 패널이 전체 폭 → 드래그 grip 사라짐 → 토글로 복귀 + 폭 유지. 1440px/820px 두 폭에서 `getBoundingClientRect` 로 실측
 - [x] 회귀 테스트: `test/web.test.js` "web: an approval in full-screen drops the panel back so the chat shows" — compiled bundle 에서 `case "confirm"` 뒤 `panelFull = false` + `v === active` 조건을 검증 (fix 제거 시 실패 확인)
 
-### [ ] **단계 2-A — 서버: 파일 읽기/쓰기 API** (난도 ★★☆)
-- [ ] `GET /fs/file?path=<rel>&sid=<sid>&k=<token>` → `{ rel, mtimeMs, size, binary, content }`
-  - `binary`(이미지/binary)는 `content`를 주지 않고 `binary: true`만 (클라이언트에서 "이진 파일은 미리보기가 없습니다" 표시)
-  - 크기 상한 512KB 초과 시 잘라서 반환 + `truncated: true`
-- [ ] `POST /fs/file` body `{ sid, path, content, mtimeMs? }`
-  - `resolveInWorkspace` 검증, `mode === "ro"`면 403
-  - **`mtimeMs`가 실disk와 다르면 409 반환** (다른 곳에서 바뀐 파일 덮어쓰기 방지, §4 결정 2)
-  - `writeAtomic` 로 저장
-- [ ] `test/web.test.js`에 읽기/쓰기 테스트 (경로 탈출 `../`, ro 모드 거부, atomic 후 내용 일치) 추가
-- [ ] 검증: curl로 읽기/쓰기, `../` 탈출 시도 → 403
+### [x] **단계 2-A — 서버: 파일 읽기/쓰기 API** (난도 ★★☆) — 완료 2026-09-30
 
-### [ ] **단계 2-B — 클라이언트: File Edit 패널** (난도 ★★★)
-- [ ] `page.ts`: `#top`에 `#btnfiles` 버튼 추가 (ICON inline — `ICON_BROWSER`/`ICON_TERMINAL` 스타일, page.ts:13~15)
-- [ ] `client.ts` `openFileTab(v, rel)`: `GET /fs/file` → `panelviews`에 textarea 붙인 tab 생성. `t.el`, `t.rel`, `t.mtimeMs` 보관
-- [ ] `renderPanel()` (client.ts:653)의 아이콘/라벨 2분기를 3분기로 확장 (`file` → "📄" + 파일명)
-- [ ] `togglePanelKind("file")` 분기 추가 — 기존 file 탭 중 마지막 것 재사용 or 새로 열기
-- [ ] `closeTab()` (client.ts:683): `file` 탭은 "저장 안 한 변경 있음?" confirm 후 닫기
-- [ ] 저장 버튼/`cmd+s`: `POST /fs/file`. 409 응답 시 "파일이 변경되었습니다" 확인 후 새로고침/강제 덮어쓰기
-- [ ] `savePanel()`/`loadPanelState()` (client.ts:636/639)에 `file` 분기 추가
-  - 복원 시 `GET /fs/file` 재요청, 404면 "삭제된 파일" 탭으로 표시 후 닫기 버튼만 남기기
-- [x] 패널 폭 상한 통일 (단계 1-D): `renderPanel()`과 드래그 핸들러 모두 `innerWidth * 0.8` 적용 — 두 상한 일치
-- [ ] 검증: 파일 클릭 → 패널에 열림 → 편집 → 저장 → 실제 파일 반영 → 파일 목록(에이전트 read_file)에도 반영
+> 아래는 **구현 전에 확정한 계약**이다. 응답 필드명과 상태 코드는 client.ts 가 그대로 의존하므로 바꾸면 안 된다.
+
+#### 2-A-1. 순수 함수 (`hub.ts` 클래스 밖, 테스트 가능)
+
+- [x] `export function readFsFile(root, rel, maxBytes = FILE_READ_CAP)` (`hub.ts:246`) → `Record<string, any>`
+  - `resolveInWorkspace(root, rel)` 로 경로 검증. 실패는 `{ forbidden: true }`
+  - 디렉터리면 `{ badTarget }`, 없으면 `{ notFound }`, 읽기 실패면 `{ error }`
+  - **이진 판정**: `cap` 만큼만 읽으면서 **앞부분에 NUL 바이트가 있으면** `binary: true` + `content` 없음. 확장자 추측은 틀리고 NUL 은 확실하다(`esc.ts` 테스트가 이 구분을 지킨다)
+  - `size > maxBytes` 면 앞 `maxBytes` 만큼만 `content` + `truncated: true` + `truncatedBytes`
+  - 반환: `{ rel, mtimeMs, size, binary, content, truncated, truncatedBytes }` (`rel` 은 워크스페이스 기준 POSIX 상대경로)
+- [x] `export function writeFsFile(root, rel, content, mtimeMs?)` (`hub.ts:284`)
+  - `content` 가 문자열이 아니면 `{ badTarget }`
+  - `mtimeMs` 가 주어졌고 실disk 와 다르면(`> 1ms`) **`{ conflict: true, mtimeMs, size, serverContent }`** 를 돌려주고 **아무것도 쓰지 않는다**
+  - `writeAtomic` 재사용 (`store.ts` 에서 export). 새 폴더는 `mkdirSync(recursive)`
+  - 반환: `{ ok: true, rel, mtimeMs, size }`
+- [x] `store.ts` 의 `writeAtomic` 을 `export` (hub.ts 가 복제하지 않게)
+- [x] `FILE_READ_CAP = 512KB` / `FILE_POST_CAP = 4MB` (`hub.ts:239`)
+
+#### 2-A-2. 라우트
+
+- [x] `GET /fs/file?path=&sid=&k=` (`hub.ts:882`) → `readFsFile(live.workspace, path)`
+  - **미지의 sid 면 403.** `/fs/tree` 처럼 조용히 `null` 로 넘기지 않는다 — 파일 API 에서 조용한 실패는 "파일이 비었다"로 보인다
+- [x] `POST /fs/file` `{ sid, path, content, mtimeMs? }` → `saveWorkspaceFile(data)` (`hub.ts:574`)
+  - `handlePost` 의 "200 + `{error}`" 계약과 **분리** — 저장 결과는 상태 코드로分支해야 한다
+  - `403` 경로 탈출/미지의 sid/ro · `409` mtime 충돌 · `400` 폴더 대상/형식 · `500` 쓰기 실패 · `413` 본문 초과
+- [x] 모드 판정은 `modeOf(live)` = `live.session?.agent?.mode` (`hub.ts:560`).
+  **명확히 `ro` 인 경우에만 거부**하고, 판별 불가(세션 미기동/테스트 대역)는 허용한다.
+  이건 방어심층이고 진짜 제한은 `buildToolSpecs("ro")` 가 에이전트에게 쓰기 도구를 아예 주지 않는 것이다 — 판별 불가까지 막으면 "아직 안 뜬 세션"에서 저장이 불가능해지는 부작용만 남는다. 판별 불가일 때 응답에 `mode: null` 을 실어 클라이언트가 버튼을 막게 한다
+- [x] POST 본문 초과 시 `req.destroy()` 대신 **413** (`hub.ts`). destroy 는 브라우저에 "이유 없는 네트워크 오류"로 보인다
+- [x] `test/web.test.js`: `readFsFile: …` / `writeFsFile: …` / `hub: /fs/file reads and saves…` / `…read-only session` / `…too large to be a file save` — 총 5개
+
+### [x] **단계 2-B — 클라이언트: File Edit 패널** (난도 ★★★) — 완료 2026-09-30
+
+#### 2-B-1. 탭 데이터 모양
+
+```js
+{ kind: "file", id, rel, mtimeMs, saved, missing, binary, loading, el, ta, status, saveBtn, reloadBtn, note, pathEl, badge }
+```
+
+- `ta` 는 **`<textarea>`** — Monaco 같은 에디터는 런타임 의존성 금지(프로젝트 규칙 2)
+- 파일 내용은 **`ta.value` 로만** 들어가고 나간다. `buildFileTab`/`loadFileInto` 안에 `innerHTML` 가 **없음**을 테스트로 강제
+
+#### 2-B-2. 체크리스트
+
+- [x] `page.ts`: `#top` 에 `#btnfiles` (inline SVG `ICON_FILE`)
+- [x] `openFileTab(v, rel)` — **열기 전에 먼저 읽는다.** 같은 `rel` 이 열려 있으면 focus.
+  읽기가 `fileOpenProblem()` 으로 "패널이 될 수 없음"을 판정하면 `alert()` 하고 **탭을 만들지 않는다** —
+  아무것도 보여줄 수 없는 패널은 지금은 노이즈, 나중엔 "이 탭은 왜 있지?" 질문이 된다
+  - `rel` 이 비면 `prompt()` 로 경로 입력 (`#btnfiles` / `+▤` 경로)
+  - ⚠️ **기존 탭이 있는 경우와 새 탭을 만드는 경우는 다르게 취급한다.**
+    새 탭 → 못 열면 만들지 않는다. 이미 열린 탭 → **절대 자동으로 닫지 않는다**(저장 안 한 편집을 조용히 버리게 된다).
+    파일이 사라진 경우는 탭에 "삭제됨" 을 표시하고 "복사해 가라"고 안내한다
+- [x] `fileOpenProblem(r)` — 읽기 결과 → 열 수 없는 사유 문자열(빈 문자열이면 열림).
+  `404` 없음 · `403` 워크스페이스 밖 · `400` 디렉터리 · `binary` 이진 · 그 외 서버 오류
+- [x] 512KB 초과 파일: **열리긴 하지만** 저장은 confirm 要求 — 탭에는 앞 512KB만 있으므로
+  그냥 저장하면 나머지가 **삭제되기 때문**. 거절하면 파일은 그대로, 상태줄에 사유 표시
+- [x] `restoreFileTabs(v, rels)` — 새로고침 복원도 같은 규칙. 되살릴 수 없는 탭은 조용히 버리지 않고
+  **한 번에 모아서** "이 파일들은 다시 열 수 없었다" + 목록으로 알린다
+- [x] `renderPanel()` 의 아이콘/라벨 **2분기 → 3분기**. `tabLabel`/`tabTitle`/`tabIcon`/`tabChanged` 로 한 곳에 모음(`client.ts:862-882`)
+  - 탭 라벨은 **basename**, 탭 본문 바에 전체 상대경로
+- [x] `togglePanelKind("file")` 분기 — 마지막 file 탭 재사용, 없으면 `openFileTab(v, "")`
+- [x] `closeTab()` — `tabChanged(t)` 면 "저장할까요?" → "그냥 닫을까요?" 2단계 confirm
+- [x] 저장: `💾` 버튼 + `Ctrl/Cmd+S` (textarea focus 여부와 무관하게 동작). `↻` 는 디스크에서 다시 읽기
+  - **409** → confirm 으로 덮어쓰기 / 디스크 버전 불러오기. **절대 조용히 이기지 않는다**
+  - **`!r || !r.ok` 면 실패로 처리** — `post()` 는 요청이 도달하지 못하면 `{}` 를 돌려준다("에러 없음" ≠ "저장됨")
+  - `ro` 세션이면 버튼 `disabled` + 사유 title, 서버도 403
+- [x] `savePanel()` / `loadPanelState()` 에 `file` 분기 — `{kind:"file", rel}`. 복원 시 `GET` 재요청, 404 면 `missing` 탭(읽기 전용 + 안내, 닫기만)
+- [x] 트리 파일 클릭: **일반 클릭 = 에디터로 열기**(VS Code/Cursor/Zed 와 동일).
+  경로 mention 은 **행 hover 시 나타나는 `＋` 버튼**(`.tri-mention`)으로 내렸다 — 숨은 modifier 로 두면 아무도 못 찾는다.
+  Alt+클릭은 mention 단축키로 남겨둔다. row `title` 에 두 동작을 모두 적어 둔다
+  - ⚠️ 초안에서는 "검증된 MVP 를 깨지 말라" 는 이유로 **일반 클릭 = mention / Alt+클릭 = 열기** 로 뒤집어 뒀다.
+    에디터가 생긴 뒤에는 이게.primary 동선을 가리는 역효과였다. 사용자가 지적해서 바로잡은 것 — 같은 실수를 반복하지 말 것
+- [x] `renderState()` 가 **모든 뷰**의 file 탭에 `applyFileMode()` — `/mode` 전환이 사이드바의 어느 세션에 와도 반영
+- [x] 패널 폭 상한 0.8 (단계 1-D) 유지
+- [x] 검증: 트리 → 파일 열림 → 편집 → 저장 → **디스크 실제 반영** → 409 충돌 → 이진 → 512KB 절단 → 삭제된 파일 → 새로고침 복원, headless Chrome 실측
+  - **열 수 없는 파일 4종(바이너리 / 없는 경로 / 워크스페이스 밖 / 디렉터리) 모두 탭 0개 + 사유 alert** 실측
+  - 512KB 파일 저장 시도 → confirm → 거절 → **디스크 614400바이트 그대로** 실측
+- [x] 회귀 테스트: "web: a file that cannot be opened never becomes a tab" (읽기 < alert < 탭 생성 순서까지 고정)
+
+#### 2-B-3. client.ts 규칙 (반드시)
+
+- `String.raw` — **리터럴 백틱 금지**, `${}` 금지. 문자열 이어붙이기만
+  - ⚠️ `edit` 도구로 `page.ts` 의 `title="terminal panel (ctrl+\`)"` 를 건드리면 **이스케이프가 조용히 사라진다** → `tsc` 가 `page.ts` 전체를 깨뜨린다. 이 문서를 고칠 때 조심할 것
+- `npm test` 의 "the client bundle compiles as JavaScript" + "every element … by id exists" + 아래 "nothing static lives inside #paneltabs" 3개가 안전망
+- `panelviews` DOM 누수 방지 — `closeTab()` 에서 `t.el.remove()`
+- `Ctrl+S` 는 브라우저 저장 대화상자를 막아야 하므로 `e.preventDefault()`
+
+### 🐛 이 단계에서 발견한 기존 회귀 (이미 커밋됨 — 2026-09-30 수정)
+
+`#panelfull` 이 `#paneltabs` 의 **자식**으로 들어 있었다(단계 1-C). 그런데 `renderPanel()` 이
+`tabsEl.innerHTML = ""` 로 탭 스트립을 통째로 지운다. → **첫 `renderPanel` 이 버튼을 파괴하고,
+두 번째부터 `$("panelfull").classList` 에서 `TypeError` 가 났다.** 패널은 첫 리페인트 이후
+(탭 추가, 세션 전환 등) 완전히 죽었다. 파일 트리만 쓰는 동안이라 드러나지 않았다.
+
+수정: `page.ts` 에 `#panelbar` 를 넣고 `#panelfull` 을 그 **형제**로 옮겼다(`#paneltabs` 는
+`renderPanel` 이 비우는 영역이므로 **정적 요소를 안에 두지 않는다**).
+회귀 테스트: "web: nothing static lives inside #paneltabs, which renderPanel empties".
+
 
 ---
 
@@ -368,12 +461,13 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 
 | # | 결정 | 권장안 | 상태 |
 |---|---|---|---|
-| 1 | 트리 표시 정책 | `.gitignore` 단순 파싱(없으면 규칙 무시하고 계속) + `.git`/`node_modules`/`.DS_Store`/숨김 파일 제외. 디렉터리/파일 개수 상한 | 미결 |
-| 2 | 저장 충돌 | 저장 전 mtime 비교, 불일치 시 409 + UI 확인 후 진행 | 미결 |
-| 3 | `file` 탭 복원 | localStorage에 `{kind:"file", rel}` 저장. 복원 시 GET 재요청, 없으면 "삭제됨" 탭 | 미결 |
-| 4 | 모드 정책 | `ro` 세션: 트리는 보이지만 편집/저장 불가(읽기 전용 뷰). `edit`/`bypass`: 저장 가능 | 미결 |
-| 5 | 큰/이진 파일 | 512KB 초과 잘라서 표시 + "전체 보기" 없음(이진은 미리보기 불가) | 미결 |
-| 6 |panel 상한 | **0.8 로 통일** — `renderPanel()`(client.ts:783)과 드래그 핸들러(client.ts:981) 모두 `innerWidth * 0.8` 적용. 두 상한 일치, 전체화면 토글과 세트 의미 일치 | 완료 (단계 1-D) |
+| 1 | 트리 표시 정책 | dot 항목 **전부 표시**. 숨기는 건 `TREE_SKIP`(빌드 산출물) + `TREE_HIDE`(`.git` `.DS_Store`) 뿐. `.gitignore` 파싱 안 함 | **결정됨** (1-B, 2026-09-30) |
+| 2 | 저장 충돌 | 저장 전 mtime 비교, 불일치 시 **409** + UI confirm 후 `overwrite: true` 로 강제 진행 | **결정됨** (2-A-1) |
+| 3 | `file` 탭 복원 | localStorage에 `{kind:"file", rel}` 저장. 복원 시 GET 재요청, 없으면 "삭제됨" 탭(닫기만) | **결정됨** (2-B-2) |
+| 4 | 모드 정책 | `ro` 세션: 트리는 보이지만 편집/저장 불가(읽기 전용 뷰). `edit`/`bypass`: 저장 가능. **서버는 "명확히 ro 인 경우에만" 거부** — 모드 판별 불가(세션 미기동)는 허용 (§2-A-2) | **결정됨** (2-A-2) |
+| 5 | 큰/이진 파일 | 512KB 초과 잘라서 표시(`truncated`). 이진은 **확장자 추정 대신 NUL 바이트로 판정**하고 `content` 를 아예 안 줌 | **결정됨** (2-A-1) |
+| 6 | panel 상한 | `renderPanel()` 과 드래그 핸들러 모두 `innerWidth * 0.8` | 완료 (단계 1-D) |
+| 7 | 에디터 구현 | **`<textarea>`** — Monaco/CodeMirror 는 런타임 의존성 금지(프로젝트 규칙 2). 파일 내용은 `textContent` 로만 | **결정됨** (2-B-1) |
 
 ---
 
@@ -384,13 +478,13 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 | 트리 API | ✅ `GET /fs/tree`가 `FsTree`(중첩 디렉터리 + 파일 이름 배열)를 반환. sid 로 워크스페이스를 서버가 resolve |
 | 트리 UI | ✅ 세션/파일 탭 전환 동작, 재귀 중첩, 펼침/접기, 새로고침, 세션 전환 동기화, 좁은 화면 |
 | MVP | 파일 클릭 → composer에 경로 삽입 → Enter 전송 → 에이전트가 그 파일을 읽음 |
-| 파일 읽기/쓰기 | ro 세션 저장 불가, 경로 탈출 불가, 저장 후 실제 파일 반영, 충돌 시 409 |
-| File Edit 패널 | 클릭→패널, 편집→저장→반영, 미저장 상태 닫기 confirm, 패널 폭/탭 전환 정상 |
-| 패널 전체화면 | `⤢` 토글 → 사이드바만 남고 패널이 전체 폭, grip 사라짐, `Ctrl+Shift+E`, 새로고침 후에도 유지, **승인 요청 시 자동 해제** |
+| 파일 읽기/쓰기 | ✅ ro 세션 저장 불가(403), 경로 탈출 불가(403/심볼릭 링크 포함), 저장 후 실제 파일 반영, 충돌 시 409 + 확인 후에만 덮어씀, **열 수 없는 파일은 탭을 만들지 않고 사유 알림**, 512KB 파일 저장은 confirm 후에만 |
+| File Edit 패널 | ✅ Alt+클릭→탭 열림, 편집→저장→디스크 반영, 미저장 상태 닫기 confirm, `Ctrl/Cmd+S`, 새로고침 후 탭 복원, ro 세션 저장 비활성, 패널 폭/탭 전환 정상 |
+| 패널 전체화면 | ✅ `⛶` 토글 → 사이드바만 남고 패널이 **나머지 전체 폭**(1440px 에서 1192px@x=248), 채팅·composer 를 덮지 않음, grip 사라짐, `Ctrl+Shift+B`, 새로고침 후에도 유지, **승인 요청 시 자동 해제** |
 | 폭 정합성 | 60% 초과 드래그 후 놓아도 폭이 되돌아가지 않음 (기존 버그 수정) |
 | 회귀 | `npm test` 통과, browser/terminal panel·세션 목록·폴더 피커·첨부 기능 동작 유지 |
 | 제약 | client.ts에 리터럴 백틱 없음, 모든 요청에 `?k=` 포함, 모드/경로 검증 통과 |
-| 테스트 | `/fs/tree`(이미 있음) + 파일 read/write에 `test/web.test.js` 테스트 추가 |
+| 테스트 | ✅ `readFsFile` `writeFsFile` 순수 함수 + `/fs/file` HTTP 5개 + 클라이언트 번들 2개 |
 | 안전망 | `client.ts` 작업 후 `npm test` 통과 (구문 검사 2개가 tsc 몫을 대신 잡아준다, §0.1) |
 
 ---
@@ -399,7 +493,7 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 
 - **대용량 repo에서 트리가 느리거나 멈춤** → 현재는 `walk()` 가 **한 번에 전체 재귀**한다(depth ≤ 6, 디렉터리당 200 상한). `node_modules`/`dist` 계열을 `TREE_SKIP` 으로 빼는 것이 실질적인 방어선이다. `.git` 도 `TREE_HIDE` 대상. 응답이 크면 지연 로딩으로 전환 필요.
 - **`.gitignore`는 파싱하지 않는다** (의도적 결정). 규칙이 빡빡해지면 사용자가 자기 파일을 못 보게 되므로, 숨기는 건 위 상수 두 개뿐.
-- **에이전트와 동시에 같은 파일 수정** → §4 결정 2(mtime 409). 이것이 없으면 사용자의 편집이 에이전트 작업으로 덮어써져 분노만 커진다.
+- ✅ **에이전트와 동시에 같은 파일 수정** → mtime 409 + confirm 으로 해결(2-A). 이것이 없으면 사용자의 편집이 에이전트 작업으로 덮어써져 분노만 커진다. 실측 완료.
 - **화면 좁을 때 트리가 챗을 좁힘** → `narrow()` 분기에서 기본적으로 파일 탭을 닫은 상태로 시작.
 - **전체화면 중 승인 요청이 안 보임** → 에이전트가 멈춘 것처럼 보이는 최악의 UX. **자동 해제 구현 완료** (client.ts:396, `case "confirm"` 뒤 `v === active && v.panelFull` 으로 해제). 회귀: `test/web.test.js`.
 - **전체화면 상태가 세션 전환 후에도 남음** → `v.panelFull`은 세션별이므로 `renderPanel()` 안에서 body class를 갱신하면 자연히 따라간다. localStorage에 값이 없으면 `false`로 시작.
@@ -413,7 +507,7 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 
 - 이 repo는 `node:test` + `scripts/test.cjs` 러너를 쓴다 (`npm test` = `npm run build && node scripts/test.cjs`).
 - **hub 서버 함수는 클래스 밖 순수 함수로 빼서** `test/web.test.js`에서 직접 테스트한다. HTTP를 띄우지 않는다.
-- `test/web.test.js` 는 `SessionChannel` 위주. `/fs/tree` HTTP 테스트는 이미 있다. 여기에 파일 read/write 테스트를 append.
+- `test/web.test.js` 는 `SessionChannel` 위주. `/fs/tree` · `/fs/file` HTTP 테스트와 `readFsFile`/`writeFsFile` 순수 함수 테스트가 이미 있다. 앞으로의 서버 로직도 **클래스 밖 순수 함수**로 빼서 여기에 두는 것을 계속 권장.
 - `npm run build`를 먼저 돌려 `dist/`를 갱신한 뒤 `npm test` (테스트는 `dist/`를 요구).
 - **`client.ts`를 건드린 작업은 `npm test` 통과가 완료 조건이다.** `tsc`는 CLIENT_JS 내부를 검사하지 못하므로(§0.1) 이 테스트가 유일한 안전망이다.
 - `page.ts`에 요소를 추가했다면 두 번째 테스트(id 존재 확인)가 자동으로 통과 여부를 알려 준다 — 별도로 확인할 필요 없다.
@@ -422,25 +516,31 @@ hub 서버 쪽에서는 `this.live: Map<sid, Live>` (hub.ts:231) 있고 `Live.wo
 
 ## 8. 빠른 참고 링크 (2026-09-30 기준 — 옮기기 전 실제 소스로 확인)
 
-- 라우팅(GET): `src/web/hub.ts:742` / (POST): `src/web/hub.ts:773` · **`/fs/tree`: `hub.ts:757`**
-- 인증: `src/web/hub.ts:732` (`?k=` 토큰 + same-origin)
-- 세션 맵: `src/web/hub.ts:254` (`this.live`), `Live` 정의 `hub.ts:62`
-- 트리 walk: `src/web/hub.ts:474` (`fsTree`) · `:485` (`walk`) · 필터 상수 `TREE_SKIP` / `TREE_HIDE`
-- 기존 fs API: `src/web/hub.ts:197` (`browseDir`)
-- atomic 쓰기 참고: `src/web/store.ts:29` (`writeAtomic`)
+- 라우팅(GET): `src/web/hub.ts:860` / (POST): `src/web/hub.ts:901` · 본문 수집+413: `hub.ts:908`
+- **`/fs/tree`: `hub.ts:875`** · **`/fs/file`(GET): `hub.ts:882`** · **`/fs/file`(POST): `req.on("end")` 안 `saveWorkspaceFile` 분기**
+- 인증: `src/web/hub.ts:850` (`?k=` 토큰 + same-origin)
+- 세션 맵: `src/web/hub.ts:339` (`this.live`), `Live` 정의 `hub.ts:62`
+- 트리 walk: `src/web/hub.ts` `fsTree` / `walk` · 필터 상수 `TREE_SKIP` / `TREE_HIDE`
+- **파일 읽기/쓰기 순수 함수: `hub.ts:246` `readFsFile` · `hub.ts:284` `writeFsFile` · `FILE_READ_CAP` `hub.ts:239` · `FILE_POST_CAP` `hub.ts:242`**
+- **저장 게이트: `hub.ts:560` `modeOf` · `hub.ts:566` `fsFileStatus` · `hub.ts:574` `saveWorkspaceFile`**
+- atomic 쓰기(재사용): `src/web/store.ts:32` (`writeAtomic`, export 됨)
+- 기존 fs API: `src/web/hub.ts:198` (`browseDir`)
 - 경로 검증(재사용): `src/sandbox.ts:36` (`resolveInWorkspace`)
 - 세션 state: `src/session.ts:396` (`state()` — `workspace`, `mode`, …)
-- 사이드바 렌더: `src/web/client.ts:510` (`renderSidebar`)
-- **파일 트리**: `client.ts:600` `currentWorkspace` · `:605` `switchTab` · `:616` `loadTree` · `:654` `renderTree` · `:670` `fillTree` · `:691` `setTreeExpanded` · `:707` `insertFile`
-- panel 시스템: `src/web/client.ts:830` (`renderPanel`) — 아이콘/라벨 2분기, `file` kind 추가 시 3분기로 확장
-- composer 입력: `src/web/client.ts:1077` (`submit`), `client.ts:1091` (`autoGrow`)
-- DOM 구조: `src/web/page.ts:30-47`(사이드바) / `page.ts:81-85`(패널)
-- 패널 리사이즈 grip: `src/web/client.ts:1038`, `src/web/styles.ts:203`
-- 패널 폭 clamp(통일 완료): `client.ts:843`(`renderPanel`)와 `client.ts:1041`(드래그 핸들러) 모두 `innerWidth * 0.8`
-- 전체화면 precedent: `src/web/styles.ts:245` (좁은 화면 `#panel` absolute 오버레이)
-- 스타일: `src/web/styles.ts` — 사이드바/트리 블록 `:76-100`(`.side-panel:not(.on)` 이 핵심)
+- 사이드바 렌더: `src/web/client.ts:513` (`renderSidebar`)
+- **파일 트리**: `client.ts:603` `currentWorkspace` · `608` `switchTab` · `619` `loadTree` · `657` `renderTree` · `673` `fillTree` · `707` `setTreeExpanded` · `723` `relOf` · `729` `insertFile`
+- **File Edit 패널**: `client.ts:887` `tabLabel` · `903` `tabChanged` · `909` `refreshFileTab` · `1057` `fileReadOnly` · `1062` `applyFileMode` · `1075` `buildFileTab` · `1128` `readFile` · `1136` `fileOpenProblem` · `1146` `applyFileBody` · `1161` `loadFileInto` · `1193` `saveFileTab` · `1238` `openFileTab` · `1266` `cannotOpen` · `867` `restoreFileTabs`
+- panel 시스템: `src/web/client.ts:914` (`renderPanel`) — `tabLabel`/`tabIcon` 3분기로 확장됨
+- composer 입력: `src/web/client.ts:1395` (`submit`), `client.ts:1117` (`insertAtCursor` — Tab 인덴트)
+- DOM 구조: `src/web/page.ts:33-50`(사이드바) / `page.ts:85-93`(패널, `#panelbar` 참고) / `page.ts:57`(`#btnfiles`)
+- 패널 리사이즈 grip: `src/web/client.ts:1356`, `src/web/styles.ts` `#panelgrip`
+- 패널 폭 clamp(통일 완료): `client.ts:928`(`renderPanel`)와 `client.ts:1359`(드래그 핸들러) 모두 `innerWidth * 0.8`
+- **전체화면 규칙: `src/web/styles.ts:390` `body.panel-full` 블록** — `#main` 숨김 + `#panel` 이 flex 로 확장 + grip 숨김. 좁은 화면용 재선언도 `styles.ts:395` `@media` 안
+- 좁은 화면 오버레이 precedent: `src/web/styles.ts:267` (`#panel` absolute, `z-index: 15`)
+- 스타일: `src/web/styles.ts` — 사이드바/트리 블록(`.side-panel:not(.on)` 이 핵심) · 파일 에디터 블록(`styles.ts:246` `.tabbody.file`)
 - 트리 관련 회귀 테스트: `test/web.test.js` — "the sidebar tab switch matches .side-tab…", "the file tree is fetched over GET…", "…never depends on state.workspace…", "…derived from the server's root", "hub: /fs/tree …"
+- 파일 에디터 회귀 테스트: `readFsFile:` · `writeFsFile:` · `hub: /fs/file …` 3개 · "web: nothing static lives inside #paneltabs…" · "web: full-width panel takes the whole row…" · "web: a file that cannot be opened never becomes a tab" · "web: the editor tab is a textarea…"
 
 ---
 
-*2026-09-30 기준: 단계 0 · 1-A · 1-B(트리) · 1-C(전체화면) 완료, `npm test` 162/162. 남은 것은 단계 2-A(파일 읽기/쓰기 API)와 2-B(File Edit 패널)다. §"이 기능을 처음 만졌다면"의 4가지 금지 사항을 먼저 읽을 것.*
+*2026-09-30 기준: 단계 0 · 1-A · 1-B · 1-C · 2-A · 2-B 전부 완료, `npm test` 171/171. §"이 기능을 처음 만졌다면"의 금지 사항, §"이 단계에서 발견한 기존 회귀"(`#paneltabs` 안의 정적 요소 · 문서/코드 불일치), §"File Edit 패널"의 탭 생성 규칙을 먼저 읽을 것.*

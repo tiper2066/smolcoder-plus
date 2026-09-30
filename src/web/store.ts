@@ -26,7 +26,10 @@ export interface SessionBody {
   events: Event[];
 }
 
-function writeAtomic(file: string, data: string): void {
+/** Write via a temp file and a rename, so an interrupted write can never leave
+ * a half-written file behind. Exported: the hub's file-edit API saves the same
+ * way. */
+export function writeAtomic(file: string, data: string): void {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, data);
   fs.renameSync(tmp, file);

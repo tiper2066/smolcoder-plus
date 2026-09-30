@@ -11,7 +11,7 @@ const path = require("path");
 const { SessionChannel } = require("../dist/web/channel");
 const { SessionStore, WorkspaceStore, workspaceKey } = require("../dist/web/store");
 const { Terminal, stripControl, toOsPath } = require("../dist/web/terminal");
-const { WebHub, browseDir, readHubRecord } = require("../dist/web/hub");
+const { WebHub, browseDir, readFsFile, writeFsFile, readHubRecord } = require("../dist/web/hub");
 const { cleanTitle, suggestTitle } = require("../dist/session");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -107,8 +107,10 @@ test("web: the relative path the composer gets is derived from the server's root
   // The server resolves "~" and normalises the path, so the client must strip
   // the root the response carried rather than re-deriving one.
   assert.match(CLIENT_JS, /treeRoot = x\.path \|\| ""/, "the rendered root is remembered");
+  assert.match(CLIENT_JS, /function relOf\(p\)/, "one place turns an absolute path into a workspace-relative one");
+  assert.match(CLIENT_JS, /const root = treeRoot \|\| currentWorkspace\(\)/);
   const ins = CLIENT_JS.slice(CLIENT_JS.indexOf("function insertFile"));
-  assert.match(ins, /const root = treeRoot \|\| currentWorkspace\(\)/);
+  assert.match(ins, /const rel = relOf\(p\)/, "insertFile goes through relOf");
 });
 
 // ---- channel -----------------------------------------------------------------
@@ -438,6 +440,303 @@ test("hub: /fs/tree returns the workspace directory tree for a session", async (
     assert.equal(t.children.find((c) => c.name === "dist"), undefined, "build output is skipped");
     const bad = await request(hub, "GET", "/fs/tree" + k + "&sid=zzz");
     assert.equal(JSON.parse(bad.body).tree, null, "unknown session yields no tree");
+  } finally {
+    hub.close();
+  }
+});
+
+test("readFsFile: returns text, and refuses anything outside the workspace", () => {
+  const dataDir = tmpdir("smol-read-");
+  const ws = path.join(dataDir, "proj");
+  fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+  fs.writeFileSync(path.join(ws, "src", "a.ts"), "export const a = 1;\n");
+  fs.writeFileSync(path.join(ws, "secret.txt"), "do not read me");
+  fs.writeFileSync(path.join(dataDir, "outside.txt"), "nope");
+  fs.symlinkSync(path.join(dataDir, "outside.txt"), path.join(ws, "link.txt"));
+
+  const ok = readFsFile(ws, "src/a.ts");
+  assert.equal(ok.ok, undefined, "a successful read carries no error");
+  assert.equal(ok.content, "export const a = 1;\n");
+  assert.equal(ok.rel, "src/a.ts", "rel is workspace-relative with forward slashes");
+  assert.equal(ok.binary, false);
+  assert.equal(ok.truncated, false);
+  assert.ok(ok.mtimeMs > 0, "mtimeMs comes from disk so the editor can detect a later change");
+
+  assert.equal(readFsFile(ws, "../outside.txt").forbidden, true, "climbing out is refused");
+  assert.equal(readFsFile(ws, "/etc/passwd").forbidden, true, "an absolute path elsewhere is refused");
+  assert.equal(readFsFile(ws, "link.txt").forbidden, true, "a symlink pointing out is refused");
+  assert.equal(readFsFile(ws, "src").badTarget, true, "a folder is not a file");
+  assert.equal(readFsFile(ws, "gone.txt").notFound, true, "a missing file is reported, not thrown");
+  assert.equal(readFsFile(ws, "").forbidden, true, "an empty path is refused");
+
+  // Binary is decided by content, not by the extension: a NUL byte means no
+  // preview, and a .ts file full of escapes must still read as text.
+  fs.writeFileSync(path.join(ws, "blob.bin"), Buffer.from([0x89, 0x50, 0x00, 0x01]));
+  const bin = readFsFile(ws, "blob.bin");
+  assert.equal(bin.binary, true);
+  assert.equal(bin.content, undefined, "binary content is not sent to the browser");
+  fs.writeFileSync(path.join(ws, "esc.ts"), "const s = \"a\\u0000b\";\n");
+  assert.equal(readFsFile(ws, "esc.ts").binary, false, "an escaped NUL in source is still text");
+
+  // Over the cap the tab gets a truncated head plus the size it is missing.
+  fs.writeFileSync(path.join(ws, "big.txt"), "x".repeat(5000));
+  const cut = readFsFile(ws, "big.txt", 1000);
+  assert.equal(cut.truncated, true);
+  assert.equal(cut.content.length, 1000);
+  assert.equal(cut.truncatedBytes, 4000);
+  assert.equal(cut.size, 5000, "the real size is still reported");
+
+  const empty = readFsFile(ws, "src/a.ts", 0);
+  assert.equal(empty.content, "", "a zero cap yields an empty head, not a crash");
+});
+
+test("writeFsFile: writes atomically and refuses to clobber a newer file", () => {
+  const dataDir = tmpdir("smol-write-");
+  const ws = path.join(dataDir, "proj");
+  fs.mkdirSync(ws);
+  fs.writeFileSync(path.join(ws, "a.txt"), "one");
+  fs.writeFileSync(path.join(dataDir, "outside.txt"), "nope");
+
+  const first = writeFsFile(ws, "a.txt", "two");
+  assert.equal(first.ok, true);
+  assert.equal(first.rel, "a.txt");
+  assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "two");
+  // The temp file the atomic write used must not be left behind.
+  assert.deepEqual(fs.readdirSync(ws), ["a.txt"]);
+
+  // Same mtime we were handed: the write goes through.
+  const again = writeFsFile(ws, "a.txt", "three", first.mtimeMs);
+  assert.equal(again.ok, true);
+  assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "three");
+
+  // A different mtime means something else touched it: refuse, and hand back
+  // what is actually on disk so the user can choose. Age the file explicitly —
+  // two writes a millisecond apart are not a reliable conflict.
+  fs.writeFileSync(path.join(ws, "a.txt"), "theirs");
+  const old = Date.now() / 1000 - 60;
+  fs.utimesSync(path.join(ws, "a.txt"), old, old);
+  const onDisk = fs.statSync(path.join(ws, "a.txt")).mtimeMs;
+  const stale = writeFsFile(ws, "a.txt", "mine", onDisk - 5000);
+  assert.equal(stale.conflict, true);
+  assert.equal(stale.serverContent, "theirs");
+  assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "theirs", "a conflict writes nothing");
+  // Forcing it is an explicit choice, and then it lands.
+  assert.equal(writeFsFile(ws, "a.txt", "mine", null).ok, true, "no mtime means no conflict check");
+  assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "mine");
+
+  assert.equal(writeFsFile(ws, "../outside.txt", "x").forbidden, true, "climbing out is refused");
+  assert.equal(fs.readFileSync(path.join(dataDir, "outside.txt"), "utf8"), "nope", "the outside file is untouched");
+  assert.equal(writeFsFile(ws, "a.txt", 123).badTarget, true, "content must be a string");
+  assert.equal(writeFsFile(ws, "", "x").forbidden, true, "an empty path is refused");
+
+  const made = writeFsFile(ws, "deep/new/file.txt", "hi");
+  assert.equal(made.ok, true, "writing into a new folder creates it");
+  assert.equal(fs.readFileSync(path.join(ws, "deep", "new", "file.txt"), "utf8"), "hi");
+});
+
+test("hub: /fs/file reads and saves, and answers 403/404/409 with reasons", async () => {
+  const dataDir = tmpdir("smol-hub-file-");
+  const ws = path.join(dataDir, "proj");
+  fs.mkdirSync(ws);
+  fs.writeFileSync(path.join(ws, "a.txt"), "one");
+  fs.writeFileSync(path.join(dataDir, "outside.txt"), "nope");
+  const hub = new WebHub({ port: 0, prefs: {}, help: "help", version: "9.9.9", dataDir, factory: fakeFactory([]), quiet: true });
+  await hub.start();
+  const k = "?k=" + hub.authToken;
+  try {
+    const { id } = JSON.parse((await request(hub, "POST", "/sessions/new" + k, { workspace: ws })).body);
+    const get = (p, sid = id) => request(hub, "GET", "/fs/file" + k + "&sid=" + sid + "&path=" + encodeURIComponent(p));
+
+    const read = await get("a.txt");
+    assert.equal(read.status, 200);
+    const body = JSON.parse(read.body);
+    assert.equal(body.content, "one");
+    assert.equal(body.rel, "a.txt");
+
+    assert.equal((await get("../outside.txt")).status, 403, "escaping the workspace is forbidden");
+    assert.equal((await get("missing.txt")).status, 404, "a deleted file is not found, not empty");
+    assert.equal((await get("a.txt", "zzz")).status, 403, "an unknown session gets no file");
+
+    const saved = await request(hub, "POST", "/fs/file" + k, { sid: id, path: "a.txt", content: "two", mtimeMs: body.mtimeMs });
+    assert.equal(saved.status, 200);
+    const after = JSON.parse(saved.body);
+    assert.equal(after.ok, true);
+    assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "two", "the file on disk really changed");
+
+    const conflict = await request(hub, "POST", "/fs/file" + k, { sid: id, path: "a.txt", content: "clobber", mtimeMs: body.mtimeMs });
+    assert.equal(conflict.status, 409, "a stale mtime is a conflict");
+    assert.equal(JSON.parse(conflict.body).serverContent, "two", "the conflict carries the disk content");
+    assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "two", "a conflict writes nothing");
+
+    const forced = await request(hub, "POST", "/fs/file" + k, { sid: id, path: "a.txt", content: "forced", mtimeMs: null });
+    assert.equal(forced.status, 200, "an explicit overwrite is allowed");
+    assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "forced");
+
+    assert.equal((await request(hub, "POST", "/fs/file" + k, { sid: id, path: "../outside.txt", content: "x" })).status, 403);
+    assert.equal(fs.readFileSync(path.join(dataDir, "outside.txt"), "utf8"), "nope", "the outside file is untouched");
+    assert.equal((await request(hub, "POST", "/fs/file" + k, { sid: "zzz", path: "a.txt", content: "x" })).status, 403);
+  } finally {
+    hub.close();
+  }
+});
+
+test("hub: /fs/file refuses to save in a read-only session", async () => {
+  const dataDir = tmpdir("smol-hub-ro-");
+  const ws = path.join(dataDir, "proj");
+  fs.mkdirSync(ws);
+  fs.writeFileSync(path.join(ws, "a.txt"), "one");
+  // A stand-in session that reports read-only, the way a real Session does.
+  const factory = fakeFactory([]);
+  const wrapped = async (ui, workspace, prefs) => {
+    const s = await factory(ui, workspace, prefs);
+    s.agent = { mode: "ro" };
+    return s;
+  };
+  const hub = new WebHub({ port: 0, prefs: { mode: "ro" }, help: "help", version: "9.9.9", dataDir, factory: wrapped, quiet: true });
+  await hub.start();
+  const k = "?k=" + hub.authToken;
+  try {
+    const { id } = JSON.parse((await request(hub, "POST", "/sessions/new" + k, { workspace: ws })).body);
+    // The mode is read off the live session, so wait until one is running.
+    await until(() => hub.snapshot().workspaces[0].sessions[0].status === "idle", 2000, "idle session");
+    const saved = await request(hub, "POST", "/fs/file" + k, { sid: id, path: "a.txt", content: "two" });
+    assert.equal(saved.status, 403, "a read-only session cannot save");
+    assert.equal(JSON.parse(saved.body).mode, "ro", "the response says why");
+    assert.equal(fs.readFileSync(path.join(ws, "a.txt"), "utf8"), "one", "the file is untouched");
+    // Reading is still allowed — read-only means read-only, not blind.
+    const read = await request(hub, "GET", "/fs/file" + k + "&sid=" + id + "&path=" + encodeURIComponent("a.txt"));
+    assert.equal(read.status, 200);
+  } finally {
+    hub.close();
+  }
+});
+
+test("web: full-width panel takes the whole row instead of overlaying the chat", () => {
+  // Regression: full width was position: absolute + width: var(--fw-panel) (the
+  // width the panel already had, ~520px) with z-index 15, so it floated over the
+  // chat and covered it while never being wider than half the screen. It also
+  // hardcoded `inset: 48px 0 0`, which drifts from #top's real height.
+  const { STYLES } = require("../dist/web/styles");
+  const rules = STYLES.slice(STYLES.indexOf("body.panel-full"));
+  assert.match(rules, /body\.panel-full #main \{ display: none; \}/, "the chat steps aside");
+  assert.match(rules, /body\.panel-full #panel \{[^}]*flex: 1 1 auto;[^}]*width: auto !important;[^}]*max-width: none;/,
+    "the panel grows in the normal flow — no overlay, no width cap");
+  assert.match(rules, /body\.panel-full #panelgrip \{ display: none; \}/, "no dragging while full width");
+  assert.ok(!/--fw-panel/.test(STYLES) && !/--fw-panel/.test(CLIENT_JS), "the capped-width variable is gone");
+  // The narrow window still floats the panel, so full width has to be restated
+  // for that layout or it would shrink back on a small screen.
+  const narrowFull = STYLES.slice(STYLES.lastIndexOf("@media (max-width: 1000px)"));
+  assert.match(narrowFull, /body\.panel-full #panel \{[^}]*width: 100% !important;/, "narrow windows keep full width too");
+  // Toggling off restores the dragged width rather than the CSS default.
+  assert.match(CLIENT_JS, /panelEl\.style\.width = v\.panelFull \? "" : pw \+ "px"/);
+});
+
+test("web: a file that cannot be opened never becomes a tab", () => {
+  // A panel with nothing to show in it is noise now and a "why is this tab
+  // here" question later, so the read happens before the tab is built.
+  const open = CLIENT_JS.slice(CLIENT_JS.indexOf("function openFileTab"), CLIENT_JS.indexOf("// terminal tabs"));
+  const problemIdx = open.indexOf("fileOpenProblem(res)");
+  const alertIdx = open.indexOf("alert(", problemIdx);
+  const buildIdx = open.indexOf("buildFileTab(v, t)");
+  const tail = open.slice(alertIdx, buildIdx);
+  assert.ok(problemIdx > 0 && alertIdx > 0 && buildIdx > 0, "openFileTab reads, alerts and builds");
+  assert.ok(problemIdx < alertIdx && alertIdx < buildIdx, "the warning comes before the tab exists");
+  assert.match(tail, /return;/, "and it returns without building the tab — no empty panel is left behind");
+
+  // Every way a read can fail has to be named, not swallowed.
+  const problem = CLIENT_JS.slice(CLIENT_JS.indexOf("function fileOpenProblem"), CLIENT_JS.indexOf("function applyFileBody"));
+  for (const [code, why] of [[404, "no such file"], [403, "outside the workspace"], [400, "not a file"], ["binary", "binary file"]])
+    assert.ok(problem.includes(String(code)) || problem.includes(why), why + " is reported, not silently ignored");
+
+  // A tab that already exists must never be closed by a failed reload — it can
+  // hold unsaved edits, and the user has to be able to copy them out.
+  const reload = CLIENT_JS.slice(CLIENT_JS.indexOf("function loadFileInto"), CLIENT_JS.indexOf("function saveFileTab"));
+  assert.ok(!/closeTab\(/.test(reload), "a failed reload reports in place instead of closing the tab");
+  assert.match(reload, /Your text is still here but cannot be saved/, "and says the text is recoverable");
+  // Restoring says which tabs it left out, once, instead of dropping them quietly.
+  assert.match(CLIENT_JS, /function restoreFileTabs\(v, rels\)/);
+  assert.match(CLIENT_JS, /These files could not be reopened/);
+  // Saving a file bigger than the read cap would delete the rest of it.
+  assert.match(CLIENT_JS, /if \(!force && t\.truncated && !confirm/, "a truncated save asks first");
+});
+
+test("web: nothing static lives inside #paneltabs, which renderPanel empties", () => {
+  // Regression: #panelfull shipped as a child of #paneltabs, and renderPanel
+  // starts with tabsEl.innerHTML = "". The first render destroyed the button and
+  // every later render threw on `$("panelfull").classList` — so the panel died
+  // after its first repaint (adding a second tab, switching sessions, ...).
+  assert.match(CLIENT_JS, /tabsEl\.innerHTML = ""/, "renderPanel rebuilds the strip");
+  const start = PAGE_HTML.indexOf('id="paneltabs">');
+  assert.ok(start > 0, "the page has a #paneltabs");
+  const strip = PAGE_HTML.slice(start + 'id="paneltabs">'.length, PAGE_HTML.indexOf("</div>", start));
+  assert.equal(strip.trim(), "", `#paneltabs must be empty in the markup, found: ${strip}`);
+  assert.ok(PAGE_HTML.includes('id="panelfull"'), "the full-width toggle still ships");
+  const bar = PAGE_HTML.slice(PAGE_HTML.indexOf('id="panelbar"'), PAGE_HTML.indexOf('id="panelviews"'));
+  assert.ok(bar.includes('id="panelfull"'), "it lives in the surrounding bar instead");
+});
+
+test("web: the editor tab is a textarea whose content never goes through innerHTML", () => {
+  const tab = CLIENT_JS.slice(CLIENT_JS.indexOf("function buildFileTab"), CLIENT_JS.indexOf("function insertAtCursor"));
+  assert.match(tab, /createElement\("textarea"\)/, "the editor is a plain textarea (no runtime dependency)");
+  assert.ok(!/innerHTML/.test(tab), "nothing in the file tab is ever written as markup");
+  const body = CLIENT_JS.slice(CLIENT_JS.indexOf("function applyFileBody"), CLIENT_JS.indexOf("function loadFileInto"));
+  assert.match(body, /t\.ta\.value = b\.content/, "file bytes arrive as a textarea value");
+  assert.ok(!/innerHTML/.test(body), "loading a file never builds markup out of it");
+
+  // The tab header used to branch on browser-vs-everything; a file tab needs a
+  // third case or it shows up labelled "terminal".
+  assert.match(CLIENT_JS, /function tabLabel\(t\)/);
+  assert.match(CLIENT_JS, /function tabIcon\(t\)/);
+  const labels = CLIENT_JS.slice(CLIENT_JS.indexOf("function tabLabel"), CLIENT_JS.indexOf("function tabChanged"));
+  for (const kind of ["browser", "term", "file"]) assert.ok(labels.includes('"' + kind + '"'), kind + " has its own label");
+
+  // A failed save must never read as a successful one: post() answers {} when
+  // the request did not land.
+  const save = CLIENT_JS.slice(CLIENT_JS.indexOf("function saveFileTab"), CLIENT_JS.indexOf("function openFileTab"));
+  assert.match(save, /if \(!r \|\| !r\.ok\)/, "only an explicit ok counts as saved");
+  assert.match(save, /r\.conflict/, "a 409 asks before overwriting");
+  assert.match(save, /saveFileTab\(v, t, true\)/, "and an explicit overwrite drops the mtime check");
+  assert.match(CLIENT_JS, /e\.key\.toLowerCase\(\) === "s"/, "ctrl/cmd+s saves");
+  // Read-only sessions get a view but not a way to write.
+  assert.match(CLIENT_JS, /function applyFileMode\(v, t\)/);
+  assert.match(CLIENT_JS, /t\.saveBtn\.disabled = ro/);
+  assert.match(CLIENT_JS, /applyFileMode\(o, t\)/, "a /mode switch reaches every open file tab");
+
+  // Unsaved changes are marked, and closing asks first.
+  assert.match(CLIENT_JS, /function tabChanged\(t\)/);
+  assert.match(CLIENT_JS, /dot-unsaved/);
+  const close = CLIENT_JS.slice(CLIENT_JS.indexOf("function closeTab"), CLIENT_JS.indexOf("function togglePanelKind"));
+  assert.match(close, /tabChanged\(t\) && !confirm/, "closing an edited file asks");
+  // A tree click opens the file, like every other editor. Mentioning the path in
+  // the composer is the secondary action and lives behind a hover button.
+  const tree = CLIENT_JS.slice(CLIENT_JS.indexOf("function fillTree"), CLIENT_JS.indexOf("function setTreeExpanded"));
+  assert.match(tree, /openFileTab\(active, rel\)/, "a plain click opens the file");
+  assert.match(tree, /el\("button", "tri-mention"/, "mentioning the path is a visible affordance, not a hidden modifier");
+  assert.match(tree, /if \(e\.altKey\) \{ insertFile\(p\)/, "alt-click still mentions, for the keyboard");
+  // File tabs survive a reload, terminals do not (their pty belongs to the hub).
+  const save1 = CLIENT_JS.slice(CLIENT_JS.indexOf("function savePanel"), CLIENT_JS.indexOf("function curTab"));
+  assert.match(save1, /t\.kind === "browser" \|\| t\.kind === "file"/);
+  assert.match(save1, /kind: "file", rel: t\.rel/);
+});
+
+test("hub: /fs/file refuses a body too large to be a file save", async () => {
+  const dataDir = tmpdir("smol-hub-big-");
+  const ws = path.join(dataDir, "proj");
+  fs.mkdirSync(ws);
+  const hub = new WebHub({ port: 0, prefs: {}, help: "help", version: "9.9.9", dataDir, factory: fakeFactory([]), quiet: true });
+  await hub.start();
+  const k = "?k=" + hub.authToken;
+  try {
+    const { id } = JSON.parse((await request(hub, "POST", "/sessions/new" + k, { workspace: ws })).body);
+    // A file the editor would actually offer still saves.
+    const ok = await request(hub, "POST", "/fs/file" + k, { sid: id, path: "big.txt", content: "x".repeat(400 * 1024) });
+    assert.equal(ok.status, 200, "a 400KB file is under the ceiling");
+    // Past the ceiling the hub answers instead of dropping the connection, so
+    // the browser can say why rather than reporting a mystery network error.
+    const huge = await request(hub, "POST", "/fs/file" + k, { sid: id, path: "huge.txt", content: "x".repeat(5 * 1024 * 1024) });
+    assert.equal(huge.status, 413);
+    assert.match(JSON.parse(huge.body).error, /too large/);
+    assert.equal(fs.existsSync(path.join(ws, "huge.txt")), false, "nothing was written");
   } finally {
     hub.close();
   }

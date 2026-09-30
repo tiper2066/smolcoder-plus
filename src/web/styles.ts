@@ -100,6 +100,11 @@ export const STYLES = String.raw`
   .tri .arrow { width: 14px; flex: none; text-align: center; color: var(--gray); font-size: 13px; }
   .tri .fname { overflow: hidden; text-overflow: ellipsis; }
   .tri.dir > .fname { color: var(--fg); font-weight: 600; }
+  /* "put this path in the composer" — hidden until the row is hovered, so the
+     tree does not turn into a column of buttons. */
+  .tri .tri-mention { margin-left: auto; flex: none; padding: 0 4px; color: var(--gray); font-size: 12px; line-height: 1; visibility: hidden; cursor: pointer; border-radius: 3px; }
+  .tri:hover .tri-mention, .tri .tri-mention:focus { visibility: visible; }
+  .tri .tri-mention:hover { color: var(--accent); background: #1a2023; }
 
   /* ---- main column ---- */
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
@@ -204,8 +209,9 @@ export const STYLES = String.raw`
   #panelgrip:hover, body.dragging #panelgrip { background: var(--sel); }
   body.dragging { cursor: col-resize; user-select: none; }
   body.dragging iframe { pointer-events: none; }
-  #paneltabs { display: flex; align-items: center; gap: 2px; padding: 5px 6px; border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; min-height: 40px; }
-  #panelfull { background: transparent; border: 1px solid transparent; color: var(--dim); cursor: pointer; border-radius: 4px; padding: 2px 6px; line-height: 1.2; }
+  #panelbar { display: flex; align-items: stretch; gap: 4px; border-bottom: 1px solid var(--line); flex: none; min-height: 40px; }
+  #paneltabs { display: flex; align-items: center; gap: 2px; padding: 5px 6px; overflow-x: auto; flex: 1; min-width: 0; }
+  #panelfull { background: transparent; border: 1px solid transparent; color: var(--dim); cursor: pointer; border-radius: 4px; padding: 2px 6px; line-height: 1.2; flex: none; align-self: center; }
   #panelfull:hover { color: var(--fg); border-color: var(--line); background: #1a2023; }
   #panelfull.on { color: var(--accent); border-color: var(--line); background: #13202a; }
   .ptab { display: flex; align-items: center; gap: 6px; padding: 3px 6px 3px 8px; border-radius: 4px; color: var(--dim); cursor: pointer; font-size: 12px; white-space: nowrap; max-width: 210px; border: 1px solid transparent; }
@@ -234,6 +240,22 @@ export const STYLES = String.raw`
   .tabbody.term .trow { display: flex; gap: 8px; padding: 6px 12px 8px; border-top: 1px solid var(--line); align-items: baseline; flex: none; }
   .tabbody.term .prompt { color: var(--accent); white-space: nowrap; max-width: 45%; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
   .tabbody.term input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--fg); font: inherit; font-size: 12.5px; }
+
+  /* File editor. A plain textarea in a monospace face: no syntax highlighting,
+     but every byte of the file is editable and nothing shadows the content. */
+  .tabbody.file { background: #0a0c0d; }
+  .tabbody.file .fbar { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-bottom: 1px solid var(--line); flex: none; min-height: 32px; }
+  .tabbody.file .fpath { color: var(--fg); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabbody.file .fbadge { color: var(--yellow); border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; font-size: 11px; flex: none; }
+  .tabbody.file .fbadge[hidden] { display: none; }
+  .tabbody.file .fstatus { color: var(--gray); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tabbody.file .fstatus.err { color: var(--red); }
+  .tabbody.file .fstatus.warn { color: var(--yellow); }
+  .tabbody.file .feditor { flex: 1; min-height: 0; width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; padding: 10px 12px; white-space: pre; overflow: auto; tab-size: 2; }
+  .tabbody.file .feditor[readonly] { color: var(--dim); }
+  .tabbody.file .fnote { flex: none; padding: 7px 12px; border-top: 1px solid var(--line); color: var(--yellow); font-size: 12px; }
+  .tabbody.file .fnote[hidden] { display: none; }
+  .ptab .dot-unsaved { color: var(--accent); font-size: 9px; line-height: 1; }
   .ab { font-weight: 700; } .ad { opacity: .6; }
   .a30 { color: #3b4048; } .a31 { color: var(--red); } .a32 { color: var(--green); } .a33 { color: var(--yellow); }
   .a34 { color: #7aa2f7; } .a35 { color: var(--magenta); } .a36 { color: var(--accent); } .a37 { color: #c0caf5; }
@@ -361,7 +383,16 @@ export const STYLES = String.raw`
     .modelpick { max-width: 150px; }
     .wshdr .iconbtn, .sess .iconbtn { visibility: visible; }
   }
-  /* full-width panel: spans full height of the main area, below #top */
-  body.panel-full #panel { position: absolute; inset: 48px 0 0; width: var(--fw-panel, 60%); min-width: 420px; max-width: 85%; border-left: 1px solid var(--line); background: var(--si); z-index: 15; }
-  body.panel-full #main:not(.dragging) #inputbox { min-height: 60px; }
+  /* Full-width panel: the chat steps aside and the panel takes the rest of the
+     row, so nothing is covered and nothing is overlaid. Kept in the normal flex
+     flow on purpose — an absolutely positioned panel sits on top of the chat,
+     and a hardcoded inset top drifts out of sync with #top's real height. */
+  body.panel-full #main { display: none; }
+  body.panel-full #panel { flex: 1 1 auto; width: auto !important; min-width: 0; max-width: none; }
+  body.panel-full #panelgrip { display: none; }
+  /* A narrow window still floats the panel over the chat, and that rule is
+     position-based — restate full width in those terms so it keeps working. */
+  @media (max-width: 1000px) {
+    body.panel-full #panel { position: absolute; inset: 48px 0 0; width: 100% !important; max-width: 100%; z-index: 15; }
+  }
 `;

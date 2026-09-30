@@ -293,6 +293,9 @@ function renderBusy() {
 
 function renderState(v) {
   for (const t of v.tabs) if (t.kind === "browser") fillUrls(t, v.state.urls || []);
+  // A /mode switch changes whether a file tab may be written, and it can land
+  // on any session in the sidebar, so refresh the tabs of every view.
+  for (const o of views.values()) for (const t of o.tabs) if (t.kind === "file") applyFileMode(o, t);
   if (v !== active) return;
   const s = v.state;
   const st = $("status");
@@ -684,7 +687,20 @@ function fillTree(host, x) {
   for (const f of x.files || []) {
     const p = x.path + "/" + f;
     const { row } = treeRow(f, p, false);
-    row.onclick = () => insertFile(p);
+    // Clicking a file opens it, like every other editor. Mentioning its path in
+    // the composer is the secondary action, so it lives behind the button that
+    // only appears on hover (and alt-click, for the keyboard).
+    const rel = relOf(p);
+    const say = el("button", "tri-mention", "＋");
+    say.title = "put this path in the composer so the agent can be told about it";
+    say.onclick = (e) => { e.stopPropagation(); if (active) insertFile(p); };
+    row.title = p + "  —  click to open · ＋ to mention";
+    row.onclick = (e) => {
+      if (!active) return;
+      if (e.altKey) { insertFile(p); return; }
+      openFileTab(active, rel);
+    };
+    row.appendChild(say);
     host.appendChild(row);
   }
 }
@@ -704,11 +720,14 @@ function setTreeExpanded(open) {
     btn.title = open ? "collapse all" : "expand all";
   }
 }
-function insertFile(p) {
+function relOf(p) {
   const root = treeRoot || currentWorkspace();
   let rel = p;
   if (root && rel.slice(0, root.length) === root) rel = rel.slice(root.length);
-  rel = rel.replace(/^[\\/]+/, "").replace(/\\/g, "/");
+  return rel.replace(/^[\\/]+/, "").replace(/\\/g, "/");
+}
+function insertFile(p) {
+  const rel = relOf(p);
   if (!rel) return;
   // A path with spaces has to survive the trip through the model's tool call,
   // so quote it rather than percent-encoding it (the agent needs the real name).
@@ -810,23 +829,88 @@ $("fsopen").onclick = () => openFolder(fsState.path);
 let panelWidth = Math.max(300, Number(ls.get("smol.panel.w")) || 520);
 function panelKey(v) { return "smol.panel." + v.sid; }
 function savePanel(v) {
-  ls.set(panelKey(v), JSON.stringify({ open: v.panelOpen, full: v.panelFull, active: v.activeTab, tabs: v.tabs.filter((t) => t.kind === "browser").map((t) => ({ kind: "browser", url: t.url })) }));
+  ls.set(panelKey(v), JSON.stringify({
+    open: v.panelOpen,
+    full: v.panelFull,
+    active: v.activeTab,
+    // Only browser and file tabs survive a reload. Terminals are owned by the
+    // hub (a pty does not outlive the process), so they are rebuilt from the
+    // snapshot by reconcileTerms instead.
+    tabs: v.tabs.filter((t) => t.kind === "browser" || t.kind === "file").map((t) => t.kind === "browser" ? { kind: "browser", url: t.url } : { kind: "file", rel: t.rel }),
+  }));
 }
 function loadPanelState(v) {
   try {
     const st = JSON.parse(ls.get(panelKey(v)) || "null");
     if (!st) return;
+    const files = [];
     for (const t of st.tabs || []) {
-      if (t.kind !== "browser") continue;
-      const tab = { kind: "browser", url: t.url || "", id: uid() };
-      buildBrowserTab(v, tab); v.tabs.push(tab);
+      if (t.kind === "browser") {
+        const tab = { kind: "browser", url: t.url || "", id: uid() };
+        buildBrowserTab(v, tab); v.tabs.push(tab);
+      } else if (t.kind === "file" && t.rel) {
+        // Re-read from disk, so a tab that was open when the browser closed
+        // comes back with current content rather than a stale copy — and a file
+        // that has since become unopenable does not come back at all.
+        files.push(t.rel);
+      }
     }
+    if (files.length) restoreFileTabs(v, files);
     v.panelOpen = !!st.open;
     v.panelFull = !!st.full;
     v.activeTab = st.active || (v.tabs[0] && v.tabs[0].id) || null;
   } catch (e) {}
 }
+// Restoring is the one place where dropping a tab silently would be confusing —
+// the user left with it open and would wonder where it went — so the ones that
+// cannot come back are named once, together.
+function restoreFileTabs(v, rels) {
+  const dropped = [];
+  Promise.all(rels.map((rel) => readFile(v, rel).then((r) => {
+    const problem = fileOpenProblem(r);
+    if (problem) { dropped.push(rel + " — " + problem); return; }
+    const b = r.body;
+    const t = { kind: "file", rel: b.rel || rel, id: uid(), mtimeMs: b.mtimeMs, saved: "", missing: false, binary: false, truncated: false };
+    buildFileTab(v, t);
+    applyFileBody(v, t, b);
+    v.tabs.push(t);
+  }))).then(() => {
+    if (!dropped.length) return;
+    alert("These files could not be reopened:\n\n" + dropped.map((d) => "· " + d.replace(/\.\s*$/, "")).join("\n") + "\n\nTheir tabs were left out.");
+    savePanel(v);
+    if (v === active) renderPanel();
+  });
+}
 function curTab(v) { return v.tabs.find((t) => t.id === v.activeTab) || v.tabs[0] || null; }
+// One place that turns a tab into what its header shows, so the label, the
+// tooltip and the aria text never disagree about which file is open.
+function tabLabel(t) {
+  if (t.kind === "browser") return t.url ? t.url.replace(/^https?:\/\//, "") : "new tab";
+  if (t.kind === "term") return "terminal " + t.tid.replace(/^t/, "");
+  // Just the name: the tab strip is narrow, and the full path is in the tab body.
+  return t.rel ? t.rel.split("/").pop() : "file";
+}
+function tabTitle(t) {
+  if (t.kind === "browser") return t.url || "new browser tab";
+  if (t.kind === "term") return "terminal in " + shortPath(t.cwd);
+  return t.missing ? t.rel + " (deleted)" : t.rel;
+}
+function tabIcon(t) {
+  if (t.kind === "browser") return "◎";
+  if (t.kind === "term") return ">_";
+  return t.missing ? "⚠" : "▤";
+}
+function tabChanged(t) {
+  if (t.kind !== "file" || t.missing || t.binary || t.loading || !t.ta) return false;
+  return t.ta.value !== t.saved;
+}
+// A keystroke only changes one thing in the tab bar: the unsaved dot. Redrawing
+// the whole strip on every character would also throw away its scroll position.
+function refreshFileTab(v, t) {
+  if (v !== active) return;
+  const dot = tabsEl.querySelector(".ptab[data-tab=" + t.id + "] .dot-unsaved");
+  if (dot) dot.hidden = !tabChanged(t);
+}
 function renderPanel() {
   const v = active;
   const open = !!(v && v.panelOpen && v.tabs.length);
@@ -834,6 +918,7 @@ function renderPanel() {
   const cur = open ? curTab(v) : null;
   $("btnbrowser").classList.toggle("on", !!(cur && cur.kind === "browser"));
   $("btnterm").classList.toggle("on", !!(cur && cur.kind === "term"));
+  $("btnfiles").classList.toggle("on", !!(cur && cur.kind === "file"));
   for (const o of views.values()) o.panelEl.hidden = o !== v || !open;
   if (!open) return;
   // Never let the panel squeeze the chat below ~20% of a small window.
@@ -841,32 +926,45 @@ function renderPanel() {
   // otherwise a switch that calls renderPanel() after dragging past 60% snaps
   // the panel back to a narrower width.
   const pw = Math.min(panelWidth, Math.max(300, window.innerWidth * 0.8));
+  // Full width comes from the body.panel-full rules in styles.ts, so the inline
+  // width has to get out of the way — the width the user dragged to is still
+  // remembered in panelWidth and comes back when they toggle off.
   panelEl.style.width = v.panelFull ? "" : pw + "px";
   document.body.classList.toggle("panel-full", v.panelFull);
-  if (v.panelFull) panelEl.style.setProperty("--fw-panel", pw + "px");
   $("panelfull").classList.toggle("on", v.panelFull);
   tabsEl.innerHTML = "";
   for (const t of v.tabs) {
     const b = el("div", "ptab" + (t === cur ? " on" : ""));
-    b.appendChild(el("span", "ico", t.kind === "browser" ? "◎" : ">_"));
-    b.appendChild(el("span", "lbl", t.kind === "browser" ? (t.url ? t.url.replace(/^https?:\/\//, "") : "new tab") : "terminal " + t.tid.replace(/^t/, "")));
+    b.dataset.tab = t.id;
+    b.appendChild(el("span", "ico", tabIcon(t)));
+    b.appendChild(el("span", "lbl", tabLabel(t)));
+    if (t.kind === "file") {
+      const dot = el("span", "dot-unsaved", "●");
+      dot.hidden = !tabChanged(t);
+      dot.title = "unsaved changes";
+      b.appendChild(dot);
+    }
     const x = el("span", "x", "×"); x.title = "close tab";
     x.onclick = (e) => { e.stopPropagation(); closeTab(v, t); };
     b.appendChild(x);
-    b.onclick = () => { v.activeTab = t.id; savePanel(v); renderPanel(); if (t.kind === "term" && t.inp) t.inp.focus(); };
-    b.title = t.kind === "browser" ? (t.url || "new browser tab") : "terminal in " + shortPath(t.cwd);
+    b.onclick = () => { v.activeTab = t.id; savePanel(v); renderPanel(); if (t.kind === "term" && t.inp) t.inp.focus(); if (t.kind === "file" && t.ta) t.ta.focus(); };
+    b.title = tabTitle(t);
     tabsEl.appendChild(b);
   }
   tabsEl.appendChild(el("span", "grow"));
   const nb = el("button", "iconbtn", "+◎"); nb.title = "new browser tab"; nb.onclick = () => openBrowserTab(v);
   const nt = el("button", "iconbtn", "+>_"); nt.title = "new terminal"; nt.onclick = () => openTerminalTab(v);
+  const nf = el("button", "iconbtn", "+▤"); nf.title = "open a file in the editor"; nf.onclick = () => openFileTab(v, "");
   const cl = el("button", "iconbtn", "»"); cl.title = "hide panel"; cl.onclick = () => { v.panelOpen = false; savePanel(v); renderPanel(); };
-  tabsEl.appendChild(nb); tabsEl.appendChild(nt); tabsEl.appendChild(cl);
+  tabsEl.appendChild(nb); tabsEl.appendChild(nt); tabsEl.appendChild(nf); tabsEl.appendChild(cl);
   for (const t of v.tabs) if (t.el) t.el.hidden = t !== cur;
 }
 function closeTab(v, t) {
   const i = v.tabs.indexOf(t);
   if (t.kind === "term") { post("/term/close", { sid: v.sid, tid: t.tid }); removeTermTab(v, t.tid); return; }
+  if (tabChanged(t) && !confirm("Save your changes to " + t.rel + " before closing it?")) {
+    if (!confirm("Close " + t.rel + " anyway and lose the changes?")) return;
+  }
   if (i >= 0) v.tabs.splice(i, 1);
   if (t.el) t.el.remove();
   if (v.activeTab === t.id) v.activeTab = (v.tabs[i] || v.tabs[i - 1] || {}).id || null;
@@ -881,11 +979,14 @@ function togglePanelKind(kind) {
   if (existing) {
     v.activeTab = existing.id; v.panelOpen = true; savePanel(v); renderPanel();
     if (kind === "term" && existing.inp) existing.inp.focus();
+    if (kind === "file" && existing.ta) existing.ta.focus();
   } else if (kind === "browser") openBrowserTab(v);
-  else openTerminalTab(v);
+  else if (kind === "term") openTerminalTab(v);
+  else openFileTab(v, "");
 }
 $("btnbrowser").onclick = () => togglePanelKind("browser");
 $("btnterm").onclick = () => togglePanelKind("term");
+$("btnfiles").onclick = () => togglePanelKind("file");
 
 // browser tabs
 function fillUrls(t, urls) {
@@ -947,6 +1048,223 @@ function buildBrowserTab(v, t) {
   reload.onclick = () => { if (t.url) frame.src = t.url; };
   fillUrls(t, v.state.urls || []);
   if (t.url) t.nav(t.url);
+}
+
+// file tabs
+// A plain textarea, not a code editor: this project takes no runtime
+// dependencies, and the file's own content is the point. Text goes in and out
+// through .value / textContent only — never innerHTML.
+function fileReadOnly(v) {
+  return !!(v && v.state && v.state.mode === "ro");
+}
+// A read-only session still gets a live view of the file: the agent can rewrite
+// it, and reload is how you see that. What it does not get is a way to write.
+function applyFileMode(v, t) {
+  const ro = fileReadOnly(v);
+  if (t.badge) t.badge.hidden = !ro;
+  if (t.saveBtn) { t.saveBtn.disabled = ro; t.saveBtn.title = ro ? "This session is read-only — files can be opened but not saved." : "save (ctrl/cmd+s)"; }
+  if (t.reloadBtn) t.reloadBtn.title = ro ? "re-read from disk" : "re-read from disk, discarding the changes in this tab";
+  if (t.ta && !t.missing && !t.binary) t.ta.readOnly = ro;
+  if (ro && tabChanged(t)) setFileStatus(t, "read-only session", "err");
+}
+function setFileStatus(t, msg, kind) {
+  if (!t.status) return;
+  t.status.textContent = msg || "";
+  t.status.className = "fstatus" + (kind ? " " + kind : "");
+}
+function buildFileTab(v, t) {
+  const body = el("div", "tabbody file");
+  body.hidden = true;
+  const bar = el("div", "fbar");
+  const path = el("span", "fpath", t.rel || "(no file)");
+  path.title = t.rel || "";
+  const badge = el("span", "fbadge", "read-only");
+  badge.title = "This session is read-only — files can be opened but not saved.";
+  const save = el("button", "iconbtn fsave", "💾");
+  save.title = "save (ctrl/cmd+s)";
+  const reload = el("button", "iconbtn freload", "↻");
+  reload.title = "re-read from disk, discarding the changes in this tab";
+  const status = el("span", "fstatus");
+  bar.appendChild(path); bar.appendChild(badge); bar.appendChild(el("span", "grow"));
+  bar.appendChild(status); bar.appendChild(reload); bar.appendChild(save);
+  const ta = document.createElement("textarea");
+  ta.className = "feditor";
+  ta.spellcheck = false;
+  ta.setAttribute("aria-label", "File contents");
+  ta.setAttribute("wrap", "off");
+  ta.title = "ctrl/cmd+s to save";
+  ta.placeholder = "Loading…";
+  const note = el("div", "fnote");
+  note.hidden = true;
+  body.appendChild(bar); body.appendChild(ta); body.appendChild(note);
+  v.panelEl.appendChild(body);
+  t.el = body; t.ta = ta; t.status = status; t.saveBtn = save; t.reloadBtn = reload; t.note = note; t.pathEl = path; t.badge = badge;
+  t.saved = "";
+
+  applyFileMode(v, t);
+  ta.oninput = () => refreshFileTab(v, t);
+  ta.onkeydown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveFileTab(v, t); }
+    // Tab indents instead of leaving the field — this is a text editor.
+    else if (e.key === "Tab") { e.preventDefault(); insertAtCursor(ta, "  "); }
+  };
+  save.onclick = () => saveFileTab(v, t);
+  reload.onclick = () => {
+    if (tabChanged(t) && !confirm("Re-read " + t.rel + " from disk? The changes in this tab are lost.")) return;
+    loadFileInto(v, t);
+  };
+}
+function insertAtCursor(ta, text) {
+  const pos = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+  ta.value = ta.value.slice(0, pos) + text + ta.value.slice(ta.selectionEnd == null ? pos : ta.selectionEnd);
+  ta.selectionStart = ta.selectionEnd = pos + text.length;
+  ta.focus();
+}
+function setFileNote(t, msg) {
+  if (!t.note) return;
+  t.note.textContent = msg || "";
+  t.note.hidden = !msg;
+}
+function readFile(v, rel) {
+  return fetch("/fs/file?k=" + k + "&sid=" + encodeURIComponent(v.sid) + "&path=" + encodeURIComponent(rel))
+    .then((r) => r.json().then((b) => ({ code: r.status, body: b || {} })))
+    .catch(() => ({ code: 0, body: { error: "cannot reach the smolcoder server" } }));
+}
+// Why a read cannot become an editor tab, or "" when it can. A panel with
+// nothing to show in it is worse than no panel: it is noise now and a "why is
+// this tab here" question later.
+function fileOpenProblem(r) {
+  if (r.code === 0) return r.body.error || "cannot reach the smolcoder server";
+  if (r.code === 404) return "there is no such file in this workspace (it may have been deleted or renamed)";
+  if (r.code === 403) return r.body.error || "that path is outside the workspace";
+  if (r.code === 400) return r.body.error || "that is a folder, not a file";
+  if (r.code !== 200) return r.body.error || "the server said " + r.code;
+  if (r.body.error) return r.body.error;
+  if (r.body.binary) return "this is a binary file (" + fmtSize(r.body.size) + ") — there is nothing to preview or edit";
+  return "";
+}
+function applyFileBody(v, t, b) {
+  t.missing = false;
+  t.binary = false;
+  t.mtimeMs = b.mtimeMs;
+  t.truncated = !!b.truncated;
+  applyFileMode(v, t);
+  // The file's bytes only ever reach the page as a textarea value, which is
+  // never parsed as markup.
+  t.ta.value = b.content;
+  t.saved = b.content;
+  setFileNote(t, b.truncated
+    ? "Showing the first " + fmtSize(b.size - b.truncatedBytes) + " of " + fmtSize(b.size) + ". Saving asks first, because it would cut the rest off."
+    : "");
+  setFileStatus(t, "saved", "");
+}
+function loadFileInto(v, t) {
+  t.ta.value = "Loading…";
+  t.saved = "";
+  t.loading = true;
+  return readFile(v, t.rel)
+    .then((r) => {
+      // The tab already exists and may hold unsaved edits, so a file that went
+      // away is reported in place rather than by closing the tab out from under
+      // the user. Only *creating* a tab refuses; see fileOpenProblem.
+      if (r.code === 404) {
+        t.missing = true;
+        t.ta.value = "";
+        t.ta.readOnly = true;
+        setFileNote(t, "This file was deleted or renamed outside smolcoder. Your text is still here but cannot be saved — copy it somewhere else before closing this tab.");
+        setFileStatus(t, "deleted", "err");
+        refreshFileTab(v, t);
+        return;
+      }
+      const problem = fileOpenProblem(r);
+      if (problem) {
+        t.ta.value = "";
+        t.ta.readOnly = true;
+        setFileNote(t, "Cannot open this file: " + problem);
+        setFileStatus(t, "cannot open", "err");
+        refreshFileTab(v, t);
+        return;
+      }
+      applyFileBody(v, t, r.body);
+      refreshFileTab(v, t);
+    })
+    .then(() => { t.loading = false; });
+}
+function saveFileTab(v, t, force) {
+  if (t.missing) { setFileStatus(t, "deleted — nothing to save", "err"); return Promise.resolve(); }
+  if (fileReadOnly(v)) { setFileStatus(t, "read-only session", "err"); return Promise.resolve(); }
+  const content = t.ta.value;
+  if (!force && content === t.saved) { setFileStatus(t, "no changes", ""); return Promise.resolve(); }
+  // The tab only ever holds the first 512KB of a bigger file, so saving it
+  // would silently delete the rest. That is not a thing to do on a reflex.
+  if (!force && t.truncated && !confirm(t.rel + " is larger than the editor's limit, so this tab only shows the beginning of it.\n\nSaving will replace the file with just that part and lose the rest.\n\nOK — save the truncated version anyway\nCancel — leave the file alone")) {
+    setFileStatus(t, "not saved — would truncate the file", "warn");
+    return Promise.resolve();
+  }
+  t.saveBtn.disabled = true;
+  setFileStatus(t, "saving…", "");
+  return post("/fs/file", { sid: v.sid, path: t.rel, content, mtimeMs: force ? null : t.mtimeMs })
+    .then((r) => {
+      t.saveBtn.disabled = false;
+      if (r && r.conflict) {
+        // The agent (or another editor) touched it. Never silently win.
+        const take = confirm(
+          t.rel + " changed on disk while you were editing it.\n\n" +
+          "OK — overwrite the disk with your version\n" +
+          "Cancel — load the disk version and lose your changes"
+        );
+        if (take) { saveFileTab(v, t, true); return; }
+        t.ta.value = r.serverContent;
+        t.saved = r.serverContent;
+        t.mtimeMs = r.mtimeMs;
+        setFileNote(t, "Loaded the version from disk. Your edits were discarded.");
+        setFileStatus(t, "reloaded from disk", "warn");
+        refreshFileTab(v, t);
+        return;
+      }
+      // post() answers {} when the request never made it, so "no error" is not
+      // the same as "saved" — only an explicit ok is.
+      if (!r || !r.ok) {
+        setFileStatus(t, (r && r.error) || "the server did not answer — nothing was written", "err");
+        return;
+      }
+      t.saved = content;
+      t.mtimeMs = r.mtimeMs;
+      t.truncated = false;
+      setFileStatus(t, "saved", "");
+      refreshFileTab(v, t);
+    });
+}
+function openFileTab(v, rel) {
+  let r = (rel || "").trim();
+  if (!r) {
+    r = String(prompt("Open which file? (path relative to the workspace)", "") || "").trim();
+    if (!r) return;
+  }
+  const already = v.tabs.find((t) => t.kind === "file" && t.rel === r);
+  if (already) {
+    v.activeTab = already.id; v.panelOpen = true; savePanel(v); renderPanel();
+    if (already.ta) already.ta.focus();
+    return;
+  }
+  // Read before drawing anything: an unopenable file gets a warning and no
+  // tab, rather than a tab that says it cannot be opened.
+  return readFile(v, r).then((res) => {
+    const problem = fileOpenProblem(res);
+    if (problem) { alert(cannotOpen(r, problem)); return; }
+    const b = res.body;
+    const t = { kind: "file", rel: b.rel || r, id: uid(), mtimeMs: b.mtimeMs, saved: "", missing: false, binary: false, truncated: false };
+    buildFileTab(v, t);
+    v.tabs.push(t);
+    v.activeTab = t.id; v.panelOpen = true;
+    applyFileBody(v, t, b);
+    savePanel(v); renderPanel();
+    t.ta.focus();
+  });
+}
+// The sandbox's own message already ends in a period, so do not add a second.
+function cannotOpen(rel, problem) {
+  return "Cannot open " + rel + "\n\n" + problem.replace(/\.\s*$/, "") + ".";
 }
 
 // terminal tabs
@@ -1176,6 +1494,16 @@ document.addEventListener("keydown", (e) => {
     else if (active && !(document.activeElement && document.activeElement.closest && document.activeElement.closest(".tabbody.term"))) post("/cancel", { sid: active.sid });
   } else if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "b") { e.preventDefault(); setSide(!sideEl.classList.contains("collapsed")); }
   else if (e.ctrlKey && e.key === "\`") { e.preventDefault(); togglePanelKind("term"); }
+  else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+    // The file tab handles it when it has focus; this catches every other case
+    // (focus in the composer, in the tree, nowhere) so the browser's own
+    // "save page" dialog never appears in an app that edits real files.
+    if (document.activeElement && document.activeElement.closest && document.activeElement.closest(".feditor")) return;
+    const t = active && curTab(active);
+    if (!t || t.kind !== "file") return;
+    e.preventDefault();
+    saveFileTab(active, t);
+  }
 });
 
 // ---- connect --------------------------------------------------------------
