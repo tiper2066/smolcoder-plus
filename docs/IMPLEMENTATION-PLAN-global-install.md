@@ -3,7 +3,7 @@
 ## Goal
 Enable users to install the tool globally using `npm install -g smolcoder-plus` and run it directly from the terminal using the `smolcoder-plus` command.
 
-## ✅ Status: PUBLISHED — 최신 `smolcoder-plus@1.1.0` (2026-09-30)
+## ✅ Status: PUBLISHED — 최신 `smolcoder-plus@1.2.0` (2026-10-01)
 
 <https://www.npmjs.com/package/smolcoder-plus> · <https://github.com/tiper2066/smolcoder-plus/releases>
 
@@ -46,6 +46,11 @@ npm install -g smolcoder-plus
 sudo rm -f /usr/local/bin/smolp /usr/local/bin/smolcoder-plus
 sudo rm -f /usr/local/lib/node_modules/smolcoder-plus   # 심볼릭 링크만 지운다
 ```
+
+### 1.2.0 — File Edit 패널 줄번호 (2026-10-01)
+- 우측 파일 편집 패널에 **줄번호 거터** 추가. `textarea` 옆 표시 전용 `div` + 스크롤 동기화, 런타임 의존성 없음.
+- 논리행 기준(`wrap=off`), 개수 변경 시만 재구성. 삭제·바이너리 탭에서는 숨김.
+- 저장·충돌·`ro`·`truncated` 동작은 그대로. 회귀 테스트 `"web: file editor shows line numbers in a synced gutter"` 추가.
 
 ### 1.1.0 — File Edit 패널 + 사이드바 파일 트리 (2026-09-30)
 - 좌측 사이드바에 **Sessions / Files 탭** + 워크스페이스 파일 트리 (dot 파일 노출, 빌드 산출물·`.git` 숨김).
