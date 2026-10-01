@@ -258,7 +258,13 @@ export const STYLES = String.raw`
   .tabbody.file .fstatus { color: var(--gray); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tabbody.file .fstatus.err { color: var(--red); }
   .tabbody.file .fstatus.warn { color: var(--yellow); }
-  .tabbody.file .feditor { flex: 1; min-height: 0; width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; padding: 10px 12px; white-space: pre; overflow: auto; tab-size: 2; }
+  /* Editor row: a fixed gutter plus the textarea. The gutter never scrolls
+     sideways — only the textarea does — and its type matches the editor so
+     each number sits on its own line. */
+  .tabbody.file .fwrap { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+  .tabbody.file .gutter { flex: none; overflow: hidden; min-width: 3ch; padding: 10px 8px 10px 12px; text-align: right; color: var(--gray); background: transparent; border-right: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; white-space: pre; user-select: none; }
+  .tabbody.file .gutter[hidden] { display: none; }
+  .tabbody.file .feditor { flex: 1; min-width: 0; min-height: 0; resize: none; border: 0; outline: 0; background: transparent; color: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; padding: 10px 12px 10px 8px; white-space: pre; overflow: auto; tab-size: 2; }
   .tabbody.file .feditor[readonly] { color: var(--dim); }
   .tabbody.file .fnote { flex: none; padding: 7px 12px; border-top: 1px solid var(--line); color: var(--yellow); font-size: 12px; }
   .tabbody.file .fnote[hidden] { display: none; }

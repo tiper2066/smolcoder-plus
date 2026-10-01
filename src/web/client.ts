@@ -1197,17 +1197,24 @@ function buildFileTab(v, t) {
   ta.placeholder = "Loading…";
   const note = el("div", "fnote");
   note.hidden = true;
-  body.appendChild(bar); body.appendChild(ta); body.appendChild(note);
+  const wrap = el("div", "fwrap");
+  const gutter = el("div", "gutter", "1");
+  gutter.setAttribute("aria-hidden", "true");
+  wrap.appendChild(gutter); wrap.appendChild(ta);
+  body.appendChild(bar); body.appendChild(wrap); body.appendChild(note);
   v.panelEl.appendChild(body);
-  t.el = body; t.ta = ta; t.status = status; t.saveBtn = save; t.reloadBtn = reload; t.note = note; t.pathEl = path; t.badge = badge;
+  t.el = body; t.ta = ta; t.status = status; t.saveBtn = save; t.reloadBtn = reload; t.note = note; t.pathEl = path; t.badge = badge; t.gutter = gutter;
   t.saved = "";
+  t._lines = 0;
 
   applyFileMode(v, t);
-  ta.oninput = () => refreshFileTab(v, t);
+  refreshGutter(t);
+  ta.oninput = () => { refreshFileTab(v, t); refreshGutter(t); };
+  ta.onscroll = () => { if (t.gutter) t.gutter.scrollTop = ta.scrollTop; };
   ta.onkeydown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveFileTab(v, t); }
     // Tab indents instead of leaving the field — this is a text editor.
-    else if (e.key === "Tab") { e.preventDefault(); insertAtCursor(ta, "  "); }
+    else if (e.key === "Tab") { e.preventDefault(); insertAtCursor(ta, "  "); refreshFileTab(v, t); refreshGutter(t); }
   };
   save.onclick = () => saveFileTab(v, t);
   reload.onclick = () => {
@@ -1220,6 +1227,25 @@ function insertAtCursor(ta, text) {
   ta.value = ta.value.slice(0, pos) + text + ta.value.slice(ta.selectionEnd == null ? pos : ta.selectionEnd);
   ta.selectionStart = ta.selectionEnd = pos + text.length;
   ta.focus();
+}
+// Line numbers are a display-only gutter next to the textarea: a textarea
+// cannot render inside itself, and this project takes no editor dependency.
+// Numbers count logical lines (wrap is off), are built as plain text, and
+// only rebuilt when the count changes — scrolling just copies scrollTop.
+function refreshGutter(t) {
+  if (!t.gutter || !t.ta) return;
+  if (t.missing || t.binary) { t.gutter.hidden = true; return; }
+  t.gutter.hidden = false;
+  const text = t.ta.value || "";
+  let n = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+  if (t._lines !== n) {
+    t._lines = n;
+    let out = "1";
+    for (let j = 2; j <= n; j++) out += "\n" + j;
+    t.gutter.textContent = out;
+  }
+  t.gutter.scrollTop = t.ta.scrollTop;
 }
 function setFileNote(t, msg) {
   if (!t.note) return;
@@ -1258,11 +1284,13 @@ function applyFileBody(v, t, b) {
     ? "Showing the first " + fmtSize(b.size - b.truncatedBytes) + " of " + fmtSize(b.size) + ". Saving asks first, because it would cut the rest off."
     : "");
   setFileStatus(t, "saved", "");
+  refreshGutter(t);
 }
 function loadFileInto(v, t) {
   t.ta.value = "Loading…";
   t.saved = "";
   t.loading = true;
+  refreshGutter(t);
   return readFile(v, t.rel)
     .then((r) => {
       // The tab already exists and may hold unsaved edits, so a file that went
@@ -1275,6 +1303,7 @@ function loadFileInto(v, t) {
         setFileNote(t, "This file was deleted or renamed outside smolcoder. Your text is still here but cannot be saved — copy it somewhere else before closing this tab.");
         setFileStatus(t, "deleted", "err");
         refreshFileTab(v, t);
+        refreshGutter(t);
         return;
       }
       const problem = fileOpenProblem(r);
@@ -1284,6 +1313,7 @@ function loadFileInto(v, t) {
         setFileNote(t, "Cannot open this file: " + problem);
         setFileStatus(t, "cannot open", "err");
         refreshFileTab(v, t);
+        refreshGutter(t);
         return;
       }
       applyFileBody(v, t, r.body);
@@ -1321,6 +1351,7 @@ function saveFileTab(v, t, force) {
         setFileNote(t, "Loaded the version from disk. Your edits were discarded.");
         setFileStatus(t, "reloaded from disk", "warn");
         refreshFileTab(v, t);
+        refreshGutter(t);
         return;
       }
       // post() answers {} when the request never made it, so "no error" is not

@@ -872,6 +872,32 @@ test("web: the editor tab is a textarea whose content never goes through innerHT
   assert.match(save1, /kind: "file", rel: t\.rel/);
 });
 
+test("web: file editor shows line numbers in a synced gutter", () => {
+  // The editor stays a plain textarea (no runtime dependency), so the numbers
+  // live in a separate gutter next to it rather than inside it.
+  assert.match(CLIENT_JS, /function refreshGutter\(t\)/, "one place rebuilds the numbers");
+  const gutter = CLIENT_JS.slice(CLIENT_JS.indexOf("function refreshGutter"), CLIENT_JS.indexOf("function readFile"));
+  assert.match(gutter, /t\.gutter\.textContent/, "numbers are plain text, never markup");
+  assert.ok(!/innerHTML/.test(gutter), "file content never becomes markup through the gutter");
+  assert.match(gutter, /charCodeAt\(i\) === 10/, "lines are counted from newlines (wrap is off)");
+  assert.match(gutter, /t\.gutter\.scrollTop = t\.ta\.scrollTop/, "scrolling the file scrolls the numbers");
+  assert.match(gutter, /t\.missing \|\| t\.binary/, "a deleted or binary tab hides the gutter");
+  assert.match(gutter, /t\._lines !== n/, "the gutter is only rebuilt when the line count changes");
+  const build = CLIENT_JS.slice(CLIENT_JS.indexOf("function buildFileTab"), CLIENT_JS.indexOf("function insertAtCursor"));
+  assert.match(build, /el\("div", "fwrap"\)/, "textarea and gutter share a row");
+  assert.match(build, /el\("div", "gutter"/, "the gutter is built with the text-only helper");
+  assert.match(build, /t\.gutter = gutter/, "the tab remembers its gutter");
+  assert.match(build, /ta\.onscroll/, "a scroll hook keeps the two in sync");
+  assert.match(build, /refreshGutter\(t\)/, "typing refreshes the numbers");
+  const applied = CLIENT_JS.slice(CLIENT_JS.indexOf("function applyFileBody"), CLIENT_JS.indexOf("function loadFileInto"));
+  assert.match(applied, /refreshGutter\(t\)/, "loading a file refreshes the numbers");
+  const { STYLES } = require("../dist/web/styles");
+  assert.match(STYLES, /\.tabbody\.file \.fwrap \{[^}]*display: flex/, "gutter and editor sit side by side");
+  assert.match(STYLES, /\.tabbody\.file \.gutter \{[^}]*white-space: pre/, "each number keeps its own line");
+  assert.match(STYLES, /\.tabbody\.file \.gutter \{[^}]*line-height: 1\.5/, "gutter rows use the editor's metrics");
+  assert.match(STYLES, /\.tabbody\.file \.gutter \{[^}]*border-right/, "the gutter stays visually separate while scrolling sideways");
+});
+
 test("hub: /fs/file refuses a body too large to be a file save", async () => {
   const dataDir = tmpdir("smol-hub-big-");
   const ws = path.join(dataDir, "proj");
