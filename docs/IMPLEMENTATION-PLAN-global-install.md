@@ -3,7 +3,7 @@
 ## Goal
 Enable users to install the tool globally using `npm install -g smolcoder-plus` and run it directly from the terminal using the `smolcoder-plus` command.
 
-## ✅ Status: PUBLISHED — 최신 `smolcoder-plus@1.2.0` (2026-10-01)
+## ✅ Status: PUBLISHED — 최신 `smolcoder-plus@1.3.0` (2026-10-04)
 
 <https://www.npmjs.com/package/smolcoder-plus> · <https://github.com/tiper2066/smolcoder-plus/releases>
 
@@ -46,6 +46,14 @@ npm install -g smolcoder-plus
 sudo rm -f /usr/local/bin/smolp /usr/local/bin/smolcoder-plus
 sudo rm -f /usr/local/lib/node_modules/smolcoder-plus   # 심볼릭 링크만 지운다
 ```
+
+### 1.3.0 — Mac 데스크탑 앱 + 설정 + web_fetch + 전역 지시문 + 터미널 stdin (2026-10-04)
+- `apps/desktop/` 신설 (동일 저장소, 별도 패키지 — 루트 zero-dep 유지): `WebHub`를 메인 프로세스에서 기동하고 창으로 표시. 단일 서버(실행 중이면 합류 안내 후 창만), 단일 포트 7433, 종료 정리. `S+` 아이콘(`assets/make-icon.swift` → `icon.icns`).
+- API 키 `.env` 대체: `Config.braveApiKey` (env > 설정 > `.env`), Hub `/settings` API, Web ⚙ 다이얼로그 (평문 미반환·마스크 힌트).
+- 새 `web_fetch` 도구: 검색 결과 페이지 본문 읽기 (브라우저 UA, 표 분리 HTML→텍스트, 상한·가드). curl 우회용.
+- 전역 지시문 `~/.smolcoder/AGENTS.md`: 설정 textarea 편집, 매 세션 항상 주입 (전역→프로젝트 순).
+- 터미널 stdin 전달: posix 5-fd 듀얼 파이프 (명령 fd 3·완료 fd 4·대화 fd 0), `sudo -S` 응답 가능, 🔒 1회성 `••••••••` 마스킹.
+- `npm test` 216 pass. 키 누출 검사(tarball·dmg 내장 core 모두 실측 0건). 미서명 배포 (Developer ID 없음, 첫 실행 우클릭→열기).
 
 ### 1.2.0 — File Edit 패널 줄번호 (2026-10-01)
 - 우측 파일 편집 패널에 **줄번호 거터** 추가. `textarea` 옆 표시 전용 `div` + 스크롤 동기화, 런타임 의존성 없음.

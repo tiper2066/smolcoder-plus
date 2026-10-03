@@ -7,9 +7,13 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { DATA_DIR } from "./config";
 import { Mode } from "./tools/index";
 
 const AGENTS_MD_CAP_CHARS = 8000; // ~2k tokens — small-context friendly
+/** Global instructions are short by design (tone, language); the project
+ * file keeps the full budget. */
+export const GLOBAL_AGENTS_CAP_CHARS = 4000;
 
 /** Read the workspace's AGENTS.md memory file, if any. */
 export function loadAgentsMd(workspace: string): string | null {
@@ -27,6 +31,52 @@ export function loadAgentsMd(workspace: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Where the global instructions live. `file` is injectable so tests can
+ * point at a scratch file instead of the real data dir. */
+export function globalAgentsPath(dataDir = DATA_DIR): string {
+  return path.join(dataDir, "AGENTS.md");
+}
+
+/** Read the global AGENTS.md (edited in Settings), if any. Always applied:
+ * unlike the workspace file it is not scoped to one project. */
+export function loadGlobalAgentsMd(file = globalAgentsPath()): string | null {
+  try {
+    if (!fs.existsSync(file)) return null;
+    let text = fs.readFileSync(file, "utf8").trim();
+    if (!text) return null;
+    if (text.length > GLOBAL_AGENTS_CAP_CHARS) {
+      text =
+        text.slice(0, GLOBAL_AGENTS_CAP_CHARS) +
+        "\n[global AGENTS.md was truncated here to save context]";
+    }
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+export interface ResolvedAgents {
+  /** Global first, then workspace — general to specific. Null when neither. */
+  text: string | null;
+  fromGlobal: boolean;
+  fromWorkspace: boolean;
+}
+
+/** Combine both sources. The global file is read every session, so every
+ * model — local or not, TUI or web or headless — always sees it. */
+export function resolveAgentsMd(workspace: string, globalFile?: string): ResolvedAgents {
+  const global = loadGlobalAgentsMd(globalFile);
+  const project = loadAgentsMd(workspace);
+  const parts: string[] = [];
+  if (global) parts.push(global);
+  if (project) parts.push(project);
+  return {
+    text: parts.length ? parts.join("\n\n") : null,
+    fromGlobal: !!global,
+    fromWorkspace: !!project,
+  };
 }
 
 export function buildSystemPrompt(opts: {

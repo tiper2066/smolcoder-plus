@@ -11,7 +11,7 @@ import { detectAll, DetectedModel, resolveContextWindow } from "./detect";
 import { EventBus } from "./events";
 import { findModelsOnNetwork, FlowUI, manageHosts } from "./network";
 import { Plan, PlanStep } from "./plan";
-import { buildSystemPrompt, loadAgentsMd } from "./prompt";
+import { buildSystemPrompt, resolveAgentsMd } from "./prompt";
 import { LmStudioProvider } from "./providers/lmstudio";
 import { OllamaProvider } from "./providers/ollama";
 import { Effort, Msg, Provider } from "./providers/types";
@@ -315,6 +315,7 @@ export class Session {
   onTurnDone: (() => void) | null = null;
 
   private readonly agentsMd: string | null;
+  private readonly agentsMdSources: string;
   private readonly prefs: SessionPrefs;
   private readonly help: string;
   private ended = false;
@@ -342,7 +343,12 @@ export class Session {
       commandsRun: [],
     };
     this.ctxMgr = new ContextManager(chosen.contextWindow, provider.maxOutputTokens);
-    this.agentsMd = loadAgentsMd(workspace);
+    const resolved = resolveAgentsMd(workspace);
+    this.agentsMd = resolved.text;
+    const sources: string[] = [];
+    if (resolved.fromGlobal) sources.push("global");
+    if (resolved.fromWorkspace) sources.push("project");
+    this.agentsMdSources = sources.join("+");
     // The step cap is a runaway-loop backstop, not a work limit — esc/ctrl+c
     // is the user's real kill switch, so set it far above any legitimate task.
     this.agent = new Agent(provider, mode0, this.sysPrompt(mode0), this.toolCtx, this.ctxMgr, this.bus, ui, true, 1000);
@@ -418,6 +424,7 @@ export class Session {
   /** The opening lines: backend · model · mode, workspace, AGENTS.md, advice. */
   announce(): void {
     const ui = this.ui;
+    if (this.agentsMd) ui.status(`· AGENTS.md loaded (${this.agentsMd.split("\n").length} lines${this.agentsMdSources ? `, ${this.agentsMdSources}` : ""})`);
     if (this.chosen.note) ui.warn(`  ${this.chosen.note}`);
     const advice = effortAdvice(this.chosen, this.effort);
     if (advice) ui.warn(`  ${advice}`);

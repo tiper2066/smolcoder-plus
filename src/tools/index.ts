@@ -1,4 +1,4 @@
-// Tool registry. Eight tools with flat parameters — no
+// Tool registry. Ten tools with flat parameters — no
 // nested objects or arrays: small models mangle them), an example call inside
 // every description (small models imitate better than they infer), and the
 // mode decides which schemas are sent. The agent rechecks mode at execution.
@@ -13,6 +13,7 @@ import { resolveInWorkspace, SandboxError } from "../sandbox";
 import { truncateMiddle } from "../util";
 import { searchFilesBounded } from "./search-worker";
 import { webSearch, DEFAULT_MAX_RESULTS } from "./web-search";
+import { fetchPageText } from "./web-fetch";
 
 export type Mode = "ro" | "edit" | "bypass";
 
@@ -67,7 +68,7 @@ export function buildToolSpecs(mode: Mode): ToolSpec[] {
     {
       name: "web_search",
       description:
-        'Search the internet using Brave Search API (no local files). Example: {"query": "2026 Asian Games medal table"}. Max results 1-8 via {"query": "...", "maxResults": 3}. Requires BRAVE_API_KEY in .env. Returns numbered titles, snippets and URLs.',
+        'Search the internet using Brave Search API (no local files). Example: {"query": "2026 Asian Games medal table"}. Max results 1-8 via {"query": "...", "maxResults": 3}. Requires BRAVE_API_KEY (Settings or .env). Returns numbered titles, snippets and URLs.',
       parameters: {
         type: "object",
         properties: {
@@ -75,6 +76,18 @@ export function buildToolSpecs(mode: Mode): ToolSpec[] {
           maxResults: { type: "number", description: "Max results (1-8, default 5)", default: 5 },
         },
         required: ["query"],
+      },
+    },
+    {
+      name: "web_fetch",
+      description:
+        'Read a web page as text — use it on web_search results instead of curl (sites like Wikipedia block curl). Example: {"url": "https://en.wikipedia.org/wiki/2026_Asian_Games_medal_table"}. Returns the page title, URL and text, truncated past ~6000 chars.',
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "Page URL (http or https)" },
+        },
+        required: ["url"],
       },
     },
     {
@@ -191,6 +204,12 @@ export async function executeTool(
           return 'Error: query is required. Example: {"query": "..."}';
         const maxResults = Number(args.maxResults) || DEFAULT_MAX_RESULTS;
         result = await webSearch(args.query, maxResults);
+        break;
+      }
+      case "web_fetch": {
+        if (!args.url || typeof args.url !== "string")
+          return 'Error: url is required. Example: {"url": "https://example.com/page"}';
+        result = await fetchPageText(args.url);
         break;
       }
       case "plan": {

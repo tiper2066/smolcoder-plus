@@ -3,7 +3,7 @@
 // validated manually via the .env key.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { formatWebSearchResults, truncate, webSearch } = require("../dist/tools/web-search");
+const { formatWebSearchResults, truncate, webSearch, resolveBraveKey, MISSING_KEY_MESSAGE } = require("../dist/tools/web-search");
 
 test("formatWebSearchResults returns empty-state message when there are no results", () => {
   const out = formatWebSearchResults([]);
@@ -32,14 +32,18 @@ test("truncate keeps full text under the cap and appends a tail note over it", (
 test("webSearch returns a clear error when BRAVE_API_KEY is missing", async () => {
   // Simulate the key not being available to this process.
   const saved = process.env.BRAVE_API_KEY;
+  const savedConfig = process.env.SMOLCODER_CONFIG;
   delete process.env.BRAVE_API_KEY;
   // loadDotEnv() walks up from process.cwd() and would re-read the repo's .env
   // (which holds a real key). Run from a clean temp dir so no .env is found,
-  // and mock fetch so nothing hits the network.
+  // point SMOLCODER_CONFIG at an empty scratch file so a Settings key cannot
+  // leak in, and mock fetch so nothing hits the network.
   const os = require("node:os");
   const fs = require("node:fs");
   const path = require("node:path");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "smol-"));
+  const cfgTmp = fs.mkdtempSync(path.join(os.tmpdir(), "smol-cfg-"));
+  process.env.SMOLCODER_CONFIG = path.join(cfgTmp, "config.json");
   const savedCwd = process.cwd();
   const cleanup = await withMockedFetch(async () => {
     throw new Error("network should not be reached when the key is missing");
@@ -47,12 +51,15 @@ test("webSearch returns a clear error when BRAVE_API_KEY is missing", async () =
   process.chdir(tmp);
   try {
     const out = await webSearch("anything");
-    assert.equal(out, "Error: Missing BRAVE_API_KEY environment variable.");
+    assert.equal(out, MISSING_KEY_MESSAGE);
   } finally {
     process.chdir(savedCwd);
     await cleanup();
     if (saved !== undefined) process.env.BRAVE_API_KEY = saved;
+    if (savedConfig !== undefined) process.env.SMOLCODER_CONFIG = savedConfig;
+    else delete process.env.SMOLCODER_CONFIG;
     fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(cfgTmp, { recursive: true, force: true });
   }
 });
 
@@ -148,5 +155,87 @@ test("webSearch returns a network-failure error when fetch throws", async () => 
   } finally {
     await cleanup();
     delete process.env.BRAVE_API_KEY;
+  }
+});
+
+test("web-search: resolves key from config when env is missing", async () => {
+  const os = require("node:os");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "smol-"));
+  const savedCwd = process.cwd();
+  const savedEnv = process.env.BRAVE_API_KEY;
+  const savedConfig = process.env.SMOLCODER_CONFIG;
+  delete process.env.BRAVE_API_KEY;
+  const cfgFile = path.join(tmp, "config.json");
+  process.env.SMOLCODER_CONFIG = cfgFile;
+  process.chdir(tmp); // no .env above tmp (tmp is under /tmp)
+  try {
+    fs.writeFileSync(cfgFile, JSON.stringify({ braveApiKey: "  cfg-key " }));
+    assert.equal(await resolveBraveKey(), "cfg-key");
+  } finally {
+    process.chdir(savedCwd);
+    if (savedEnv !== undefined) process.env.BRAVE_API_KEY = savedEnv;
+    if (savedConfig !== undefined) process.env.SMOLCODER_CONFIG = savedConfig;
+    else delete process.env.SMOLCODER_CONFIG;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("web-search: real env wins over config", async () => {
+  const os = require("node:os");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "smol-"));
+  const savedCwd = process.cwd();
+  const savedEnv = process.env.BRAVE_API_KEY;
+  const savedConfig = process.env.SMOLCODER_CONFIG;
+  const cfgFile = path.join(tmp, "config.json");
+  process.env.SMOLCODER_CONFIG = cfgFile;
+  process.env.BRAVE_API_KEY = "env-key";
+  process.chdir(tmp);
+  try {
+    fs.writeFileSync(cfgFile, JSON.stringify({ braveApiKey: "cfg-key" }));
+    assert.equal(await resolveBraveKey(), "env-key");
+  } finally {
+    process.chdir(savedCwd);
+    if (savedEnv !== undefined) process.env.BRAVE_API_KEY = savedEnv;
+    else delete process.env.BRAVE_API_KEY;
+    if (savedConfig !== undefined) process.env.SMOLCODER_CONFIG = savedConfig;
+    else delete process.env.SMOLCODER_CONFIG;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("web-search: sends the config key in the Brave header", async () => {
+  const os = require("node:os");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "smol-"));
+  const savedCwd = process.cwd();
+  const savedEnv = process.env.BRAVE_API_KEY;
+  const savedConfig = process.env.SMOLCODER_CONFIG;
+  delete process.env.BRAVE_API_KEY;
+  process.env.SMOLCODER_CONFIG = path.join(tmp, "config.json");
+  process.chdir(tmp);
+  let seenToken = null;
+  const cleanup = await withMockedFetch(async (url, options) => {
+    seenToken = options?.headers?.["X-Subscription-Token"];
+    return new Response(JSON.stringify({ web: { results: [] } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  try {
+    fs.writeFileSync(process.env.SMOLCODER_CONFIG, JSON.stringify({ braveApiKey: "cfg-key" }));
+    await webSearch("example query");
+    assert.equal(seenToken, "cfg-key");
+  } finally {
+    process.chdir(savedCwd);
+    await cleanup();
+    if (savedEnv !== undefined) process.env.BRAVE_API_KEY = savedEnv;
+    if (savedConfig !== undefined) process.env.SMOLCODER_CONFIG = savedConfig;
+    else delete process.env.SMOLCODER_CONFIG;
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

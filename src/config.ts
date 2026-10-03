@@ -9,9 +9,13 @@ import { Effort } from "./providers/types";
 import { Mode } from "./tools/index";
 
 // SMOLCODER_CONFIG points tests at a scratch file so they never touch the
-// real one.
+// real one. Read per call (not once at import) so tests can redirect it.
 export const CONFIG_PATH = process.env.SMOLCODER_CONFIG || path.join(os.homedir(), ".smolcoder.json");
 export const DATA_DIR = path.join(os.homedir(), ".smolcoder");
+
+function configPath(): string {
+  return process.env.SMOLCODER_CONFIG || CONFIG_PATH;
+}
 
 /** Another machine that serves models, added from the model picker. */
 export interface SavedHost {
@@ -30,11 +34,13 @@ export interface Config {
   lastMode?: Mode;
   effort?: Effort | null;
   hosts?: SavedHost[];
+  /** Brave Search API key set from Settings (desktop app / web UI). */
+  braveApiKey?: string;
 }
 
 export function loadConfig(): Config {
   try {
-    const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    const cfg = JSON.parse(fs.readFileSync(configPath(), "utf8"));
     // Never let bypass be inherited implicitly from a past session — a single
     // shift+tab into it would otherwise silently persist unattended, unchecked
     // command execution into every later run, including headless -p in CI.
@@ -47,6 +53,13 @@ export function loadConfig(): Config {
           .filter((h: any) => h && typeof h.address === "string" && h.address.trim())
           .map((h: any) => ({ address: h.address.trim(), ...(typeof h.name === "string" && h.name.trim() ? { name: h.name.trim() } : {}) }))
       : [];
+    // API key from Settings: keep it trimmed, drop it when it is empty.
+    if (typeof cfg.braveApiKey === "string") {
+      cfg.braveApiKey = cfg.braveApiKey.trim();
+      if (!cfg.braveApiKey) delete cfg.braveApiKey;
+    } else if (cfg.braveApiKey !== undefined) {
+      delete cfg.braveApiKey;
+    }
     return cfg;
   } catch {
     return {};
@@ -55,7 +68,14 @@ export function loadConfig(): Config {
 
 export function saveConfig(cfg: Config): void {
   try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+    const p = configPath();
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+    // The config may hold an API key: restrict to owner-only when possible.
+    try {
+      fs.chmodSync(p, 0o600);
+    } catch {
+      /* non-fatal (e.g. Windows) */
+    }
   } catch {
     /* non-fatal */
   }

@@ -11,7 +11,7 @@ const path = require("path");
 const { SessionChannel } = require("../dist/web/channel");
 const { SessionStore, WorkspaceStore, workspaceKey } = require("../dist/web/store");
 const { Terminal, stripControl, toOsPath } = require("../dist/web/terminal");
-const { WebHub, browseDir, readFsFile, writeFsFile, readHubRecord } = require("../dist/web/hub");
+const { WebHub, browseDir, readFsFile, writeFsFile, readHubRecord, getSettingsStatus, saveSettingsKey, saveSettingsNotes } = require("../dist/web/hub");
 const { cleanTitle, suggestTitle } = require("../dist/session");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -427,6 +427,59 @@ test("terminal helpers: control sequences are stripped but colors kept; msys pat
   assert.equal(stripControl("\x1b[32mok\x1b[0m \x1b[2J\x1b[H\x1b]0;title\x07x"), "\x1b[32mok\x1b[0m x");
   if (process.platform === "win32") assert.equal(toOsPath("/c/Projects/x"), "C:\\Projects\\x");
   else assert.equal(toOsPath("/home/x"), "/home/x");
+});
+
+test("terminal: input while busy answers a stdin prompt", async () => {
+  const dir = fs.realpathSync(tmpdir("smol-term-in-"));
+  let out = "";
+  const plain = () => out.replace(/\x1b\[[0-9;]*m/g, "");
+  const dones = [];
+  const term = new Terminal("t-in", dir, { output: (s) => (out += s), done: (code, cwd) => dones.push({ code, cwd }) });
+  if (/powershell|pwsh/i.test(term.shell.exe)) {
+    term.close();
+    return; // `read` is a posix builtin; sudo-style prompting is posix anyway
+  }
+  try {
+    term.write("read -r line; echo PROMPT_GOT:$line");
+    // `read` blocks on the pipe (no /dev/null redirect); the next input
+    // answers it instead of starting a new command.
+    await new Promise((r) => setTimeout(r, 800));
+    term.input("hello-prompt-answer");
+    await until(() => plain().includes("PROMPT_GOT:hello-prompt-answer"), 15000, "prompt answered");
+  } finally {
+    term.close();
+  }
+});
+
+test("terminal: hidden input is masked in the stream", async () => {
+  const dir = fs.realpathSync(tmpdir("smol-term-mask-"));
+  let out = "";
+  const plain = () => out.replace(/\x1b\[[0-9;]*m/g, "");
+  const term = new Terminal("t-mask", dir, { output: (s) => (out += s), done: () => {} });
+  try {
+    term.write("sleep 8");
+    await until(() => plain().includes("❯ sleep 8"), 15000, "command echo");
+    term.input(":", true);
+    await until(() => plain().includes("•"), 15000, "masked echo");
+    assert.ok(!plain().includes("❯ :"), "the real text never appears, not even as an echo");
+  } finally {
+    term.interrupt();
+    term.close();
+  }
+});
+
+test("terminal: input while idle runs a command", async () => {
+  const dir = fs.realpathSync(tmpdir("smol-term-idle-"));
+  let out = "";
+  const dones = [];
+  const term = new Terminal("t-idle", dir, { output: (s) => (out += s), done: (code, cwd) => dones.push({ code, cwd }) });
+  try {
+    term.input("echo IDLE_MARKER");
+    await until(() => dones.length >= 1, 15000, "idle input runs");
+    assert.match(out, /IDLE_MARKER/);
+  } finally {
+    term.close();
+  }
 });
 
 test("terminal: runs commands in a persistent shell, reports exit codes and tracks cwd", async () => {
@@ -1068,4 +1121,155 @@ test("hub: a session that fails to start shows the error and can be retried", as
   } finally {
     hub.close();
   }
+});
+
+test("hub: settings get/save round-trip", () => {
+  const cfgDir = tmpdir("smol-settings-");
+  const dataDir = tmpdir("smol-settings-data-");
+  const savedConfig = process.env.SMOLCODER_CONFIG;
+  const savedEnv = process.env.BRAVE_API_KEY;
+  process.env.SMOLCODER_CONFIG = path.join(cfgDir, "config.json");
+  delete process.env.BRAVE_API_KEY;
+  try {
+    assert.deepEqual(getSettingsStatus(dataDir), { braveApiKeySet: false, envOverride: false, globalAgentsMd: "" });
+    const saved = saveSettingsKey("  test-key-1234 ");
+    assert.equal(saved.ok, true);
+    assert.equal(saved.braveApiKeySet, true);
+    assert.ok(!JSON.stringify(saved).includes("test-key-1234"), "the full key is never returned");
+    const status = getSettingsStatus(dataDir);
+    assert.equal(status.braveApiKeySet, true);
+    assert.equal(status.envOverride, false);
+    assert.match(status.braveApiKeyHint, /^test/, "a short hint is shown");
+    assert.ok(!JSON.stringify(status).includes("test-key-1234"), "GET never leaks the full key");
+    const cleared = saveSettingsKey("   ");
+    assert.equal(cleared.braveApiKeySet, false);
+    assert.deepEqual(getSettingsStatus(dataDir), { braveApiKeySet: false, envOverride: false, globalAgentsMd: "" });
+    assert.throws(() => saveSettingsKey(123), /must be a string/);
+    assert.throws(() => saveSettingsKey("x".repeat(201)), /too long/);
+  } finally {
+    if (savedConfig !== undefined) process.env.SMOLCODER_CONFIG = savedConfig;
+    else delete process.env.SMOLCODER_CONFIG;
+    if (savedEnv !== undefined) process.env.BRAVE_API_KEY = savedEnv;
+    fs.rmSync(cfgDir, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("hub: settings notes save, read and clear", () => {
+  const dataDir = tmpdir("smol-settings-notes-");
+  try {
+    assert.equal(getSettingsStatus(dataDir).globalAgentsMd, "");
+    const saved = saveSettingsNotes("  Answer in Korean. ", dataDir);
+    assert.equal(saved.ok, true);
+    assert.equal(getSettingsStatus(dataDir).globalAgentsMd, "Answer in Korean.");
+    assert.ok(fs.existsSync(path.join(dataDir, "AGENTS.md")), "stored as a plain file next to the sessions");
+    const cleared = saveSettingsNotes("   ", dataDir);
+    assert.equal(cleared.cleared, true);
+    assert.equal(getSettingsStatus(dataDir).globalAgentsMd, "");
+    assert.throws(() => saveSettingsNotes(123, dataDir), /must be a string/);
+    assert.throws(() => saveSettingsNotes("x".repeat(4001), dataDir), /too long/);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("hub: settings endpoints require a token and validate input", async () => {
+  const dataDir = tmpdir("smol-hub-settings-");
+  const cfgDir = tmpdir("smol-settings-http-");
+  const savedConfig = process.env.SMOLCODER_CONFIG;
+  const savedEnv = process.env.BRAVE_API_KEY;
+  process.env.SMOLCODER_CONFIG = path.join(cfgDir, "config.json");
+  delete process.env.BRAVE_API_KEY;
+  const hub = new WebHub({ port: 0, prefs: {}, help: "help", version: "9.9.9", dataDir, factory: fakeFactory([]), quiet: true });
+  await hub.start();
+  const k = "?k=" + hub.authToken;
+  try {
+    assert.equal((await request(hub, "POST", "/settings/get", {})).status, 403);
+    assert.equal((await request(hub, "POST", "/settings/save", { braveApiKey: "x" })).status, 403);
+    const empty = JSON.parse((await request(hub, "POST", "/settings/get" + k, {})).body);
+    assert.equal(empty.braveApiKeySet, false);
+    const saved = JSON.parse((await request(hub, "POST", "/settings/save" + k, { braveApiKey: "http-key-9999" })).body);
+    assert.equal(saved.ok, true);
+    const status = JSON.parse((await request(hub, "POST", "/settings/get" + k, {})).body);
+    assert.equal(status.braveApiKeySet, true);
+    assert.ok(!(await request(hub, "POST", "/settings/get" + k, {})).body.includes("http-key-9999"));
+    const bad = await request(hub, "POST", "/settings/save" + k, { braveApiKey: 123 });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body, /must be a string/);
+    process.env.BRAVE_API_KEY = "env-key";
+    const over = JSON.parse((await request(hub, "POST", "/settings/get" + k, {})).body);
+    assert.equal(over.envOverride, true);
+    assert.equal(over.braveApiKeyHint, undefined, "an env override shadows the stored hint");
+  } finally {
+    hub.close();
+    if (savedConfig !== undefined) process.env.SMOLCODER_CONFIG = savedConfig;
+    else delete process.env.SMOLCODER_CONFIG;
+    if (savedEnv !== undefined) process.env.BRAVE_API_KEY = savedEnv;
+    else delete process.env.BRAVE_API_KEY;
+    fs.rmSync(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test("hub: settings save accepts notes alone and rejects empty saves", async () => {
+  const dataDir = tmpdir("smol-hub-notes-");
+  const cfgDir = tmpdir("smol-notes-cfg-");
+  const savedConfig = process.env.SMOLCODER_CONFIG;
+  const savedEnv = process.env.BRAVE_API_KEY;
+  process.env.SMOLCODER_CONFIG = path.join(cfgDir, "config.json");
+  delete process.env.BRAVE_API_KEY;
+  const hub = new WebHub({ port: 0, prefs: {}, help: "help", version: "9.9.9", dataDir, factory: fakeFactory([]), quiet: true });
+  await hub.start();
+  const k = "?k=" + hub.authToken;
+  try {
+    const saved = JSON.parse((await request(hub, "POST", "/settings/save" + k, { globalAgentsMd: "Be brief." })).body);
+    assert.equal(saved.ok, true);
+    const status = JSON.parse((await request(hub, "POST", "/settings/get" + k, {})).body);
+    assert.equal(status.globalAgentsMd, "Be brief.");
+    assert.equal(status.braveApiKeySet, false, "saving notes alone leaves the key alone");
+    const empty = await request(hub, "POST", "/settings/save" + k, {});
+    assert.equal(empty.status, 400);
+    assert.match(empty.body, /nothing to save/);
+  } finally {
+    hub.close();
+    if (savedConfig !== undefined) process.env.SMOLCODER_CONFIG = savedConfig;
+    else delete process.env.SMOLCODER_CONFIG;
+    if (savedEnv !== undefined) process.env.BRAVE_API_KEY = savedEnv;
+    else delete process.env.BRAVE_API_KEY;
+    fs.rmSync(cfgDir, { recursive: true, force: true });
+  }
+});
+
+test("web: terminal input has a one-shot mask for passwords", () => {
+  // The lock button and the waiting hint live in ensureTermTab; everything is
+  // built with el()/createElement so no new page ids are needed.
+  const fn = CLIENT_JS.slice(CLIENT_JS.indexOf("function ensureTermTab"), CLIENT_JS.indexOf("function setPrompt"));
+  assert.ok(fn.length > 100, "the terminal tab section is present");
+  assert.match(fn, /maskNext/, "a one-shot mask flag");
+  assert.match(fn, /hidden: masked/, "the flag travels to /term/input");
+  assert.match(fn, /••••••••/, "masked input echoes bullets");
+  assert.match(fn, /sudo needs -S/, "the waiting hint names the sudo form that works");
+  // Only the lock block is asserted here: the tab's Ctrl+L handler below it
+  // clears with out.innerHTML = "" (pre-existing, no user data in it).
+  const lock = fn.slice(fn.indexOf("const lock ="), fn.indexOf("inp.onkeydown"));
+  assert.ok(lock.length > 100, "the lock block is present");
+  assert.ok(!lock.includes("innerHTML"), "no HTML interpolation around the masked input");
+});
+
+test("web: settings dialog is wired to the settings endpoints", () => {
+  assert.ok(PAGE_HTML.includes('id="settings"'), "the sidebar has a settings button");
+  assert.ok(CLIENT_JS.includes('$("settings")'), "the client looks up the settings button");
+  assert.ok(CLIENT_JS.includes("/settings/get"), "the client reads the settings");
+  assert.ok(CLIENT_JS.includes("/settings/save"), "the client saves the settings");
+});
+
+test("web: settings dialog never puts user input through innerHTML", () => {
+  // The dialog shows a server hint and takes a key: both must travel via
+  // textContent (the el() helper) and input.value, never innerHTML.
+  const fn = CLIENT_JS.slice(CLIENT_JS.indexOf("function openSettings"), CLIENT_JS.indexOf("// ---- global keys"));
+  assert.ok(fn.length > 100, "the settings section is present");
+  assert.ok(!fn.includes("innerHTML"), "no HTML interpolation in the settings dialog");
+  assert.match(fn, /createElement\("input"\)/, "the key field is a created input");
+  assert.match(fn, /\.type = "password"/, "the key field masks its content");
+  assert.match(fn, /createElement\("textarea"\)/, "global instructions are a created textarea");
+  assert.match(fn, /globalAgentsMd/, "the notes travel under their own field");
 });

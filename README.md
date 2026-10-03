@@ -66,30 +66,41 @@ stable version of TypeScript?"* and the agent will search and cite sources.
 2. In the dashboard, create an API key. The free plan includes 1 query/second
    and 2,000 queries/month — plenty for agent use.
 
-**2. Add the key to a `.env` file**
+**2. Add the key — Settings screen or a `.env` file**
 
-Put a `.env` file in your **project root**:
+Easiest: open the Web UI (or the desktop app), click the **⚙ Settings**
+button in the sidebar footer, paste the key and hit **Save**. No restart
+needed — the next search uses it right away. The key is stored in
+`~/.smolcoder.json` (owner-only permissions).
+
+Alternatively, put a `.env` file in your **project root**:
 
 ```env
 BRAVE_API_KEY=your_api_key_here
 ```
 
-- The loader walks **up from the current directory** to find `.env`, so the
-  agent works from any subdirectory of the project.
-- A real exported environment variable always wins over `.env` values:
+- Lookup order: **exported environment variable > Settings >
+  `.env`.** The loader walks **up from the current directory** to find
+  `.env`, so the agent works from any subdirectory of the project.
   `export BRAVE_API_KEY=...` is a valid alternative (useful for CI).
 - Keep the key secret — never commit `.env` (add it to `.gitignore`).
+  The Settings screen only ever shows a short hint (first 4 chars),
+  never the full key.
 
 **3. Verify it works**
 
 Run the agent in your project and ask something that requires live data.
 If the key is missing, the tool returns `Error: Missing BRAVE_API_KEY
-environment variable.` — that's your cue to set it up.
+(set it in Settings or .env).` — that's your cue to set it up.
 
 **Notes**
 
 - Results are capped at 8 per call (default 5) and truncated to ~3,000 chars
   to keep the context window clean.
+- To read a result page, the agent uses the `web_fetch` tool
+  (`{"url": "..."}` → title + text, ~6,000 chars). Prefer it over
+  `curl` — bot-protected sites like Wikipedia reject bare curl but answer
+  the tool's browser request.
 - No key? Everything else (file tools, shell, planning, TUI/Web UI) works
   normally — only `web_search` is unavailable.
 
@@ -124,6 +135,41 @@ smolp --web            # or: smolcoder-plus --web
   adds that folder to the already-running UI and prints its URL.
 - Port already taken? It tells you the next one to try: `smolp --web 7434`.
 - **Ctrl+C** stops the server.
+- The **⚙ Settings** button in the sidebar footer stores the Brave Search
+  API key — no `.env` file needed (see above).
+
+### 🍎 Desktop App — Mac (no terminal needed)
+
+Prefer a double-click over a terminal? Build the Mac app:
+
+```bash
+cd apps/desktop && npm install && npm run dist
+```
+
+- Opens `smolcoder-plus-1.3.0-arm64.dmg` — drag the app to
+  `/Applications` and launch it. The local server starts automatically and
+  the Web UI opens in its own window.
+- The core is shared with the CLI: same version, same sessions under
+  `~/.smolcoder/`, same Settings screen for the API key.
+- One server only: if `smolp --web` (or another app run) already owns the
+  port, the app shows a notice and opens a window onto that server instead
+  of starting a second one. Quitting the app then leaves the server running;
+  quitting your own server shuts it down as usual.
+- The build is **unsigned** (no Developer ID here): on first launch,
+  right-click the app → **Open** → **Open** to pass Gatekeeper. To ship a
+  signed build, add a `Developer ID Application` certificate and notarize
+  (see `docs/desktop-app-handoff.md` Phase 5).
+
+### 📝 Agent instructions — global and per-project
+
+The agent follows an `AGENTS.md` file in your **project root** when one
+exists (conventions, architecture — it travels with the repo).
+
+For things that apply everywhere (tone, language), use the **global**
+instructions instead: open the Web UI or desktop app → **⚙ Settings** →
+write them in the notes box → **Save**. They are stored in
+`~/.smolcoder/AGENTS.md` and read by every session; a project's own file
+still applies on top.
 
 ## 🏗️ Architecture
 - **Core Agent**: Enhanced with better planning and tool-use logic.

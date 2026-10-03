@@ -1,0 +1,39 @@
+{
+  "name": "smolcoder-plus-desktop",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Mac desktop shell for smolcoder-plus: starts the local web hub and shows it in a window.",
+  "main": "main.js",
+  "files": [
+    "main.js",
+    "package.json"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "dev.smolcoder.plus",
+    "productName": "smolcoder-plus",
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../dist",
+        "to": "core",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon.icns",
+      "target": ["dmg"]
+    }
+  }
+}

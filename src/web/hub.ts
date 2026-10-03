@@ -15,7 +15,8 @@ import * as fs from "fs";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
-import { DATA_DIR, loadConfig } from "../config";
+import { DATA_DIR, loadConfig, saveConfig, updateConfig } from "../config";
+import { GLOBAL_AGENTS_CAP_CHARS, globalAgentsPath, loadGlobalAgentsMd } from "../prompt";
 import { noBackendsMessage, prepareModel, Session, SessionPrefs, SessionSnapshot, setupWithoutLocalModels } from "../session";
 import { tryFetchJson } from "../util";
 import { Attachment, classifyUpload, extOf, MAX_UPLOAD_BYTES, mimeForExt, safeName } from "../attachments";
@@ -313,6 +314,68 @@ export function writeFsFile(root: string, rel: string, content: unknown, mtimeMs
   }
   const after = fs.statSync(abs);
   return { ok: true, rel: relPath(root, abs), mtimeMs: after.mtimeMs, size: after.size };
+}
+
+// ---- settings (API key) ------------------------------------------------------
+// Pure functions (no hub state) so the rules can be tested without HTTP. The
+// full key is never returned: GET only reports whether one is set and a short
+// hint of the stored value. An exported env var always wins (see
+// resolveBraveKey in tools/web-search), so the page can tell the user the
+// Settings field is shadowed.
+
+/** Longest accepted key: rejects pasted dumps, not real keys. */
+export const SETTINGS_KEY_CAP = 200;
+
+function maskKey(key: string): string {
+  return key.slice(0, 4) + "••••";
+}
+
+/** What the Settings screen shows. Never includes the full key (the global
+ * instructions are the user's own text, so they are returned whole for
+ * editing). `dataDir` scopes the global file; the hub passes its own so
+ * tests never touch the real one. */
+export function getSettingsStatus(dataDir = DATA_DIR): Record<string, any> {
+  const envKey = process.env.BRAVE_API_KEY?.trim();
+  if (envKey) return { braveApiKeySet: true, envOverride: true, globalAgentsMd: loadGlobalAgentsMd(globalAgentsPath(dataDir)) ?? "" };
+  const stored = loadConfig().braveApiKey?.trim();
+  if (stored) return { braveApiKeySet: true, envOverride: false, braveApiKeyHint: maskKey(stored), globalAgentsMd: loadGlobalAgentsMd(globalAgentsPath(dataDir)) ?? "" };
+  return { braveApiKeySet: false, envOverride: false, globalAgentsMd: loadGlobalAgentsMd(globalAgentsPath(dataDir)) ?? "" };
+}
+
+/** Store (or clear) the Settings key. An empty string deletes it. Throws on
+ * invalid input so the route answers 400 with the reason. */
+export function saveSettingsKey(input: unknown): Record<string, any> {
+  if (typeof input !== "string") throw new Error("braveApiKey must be a string.");
+  const key = input.trim();
+  if (key.length > SETTINGS_KEY_CAP) throw new Error(`braveApiKey is too long (max ${SETTINGS_KEY_CAP} chars).`);
+  if (!key) {
+    const cfg = loadConfig();
+    delete cfg.braveApiKey;
+    saveConfig(cfg);
+    return { ok: true, braveApiKeySet: false };
+  }
+  updateConfig({ braveApiKey: key });
+  return { ok: true, braveApiKeySet: true, braveApiKeyHint: maskKey(key) };
+}
+
+/** Store (or clear) the global instructions edited in Settings. An empty
+ * string deletes the file. Throws on invalid input (400 with the reason). */
+export function saveSettingsNotes(input: unknown, dataDir = DATA_DIR): Record<string, any> {
+  if (typeof input !== "string") throw new Error("globalAgentsMd must be a string.");
+  const file = globalAgentsPath(dataDir);
+  const text = input.trim();
+  if (!text) {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      /* already gone */
+    }
+    return { ok: true, updated: true, cleared: true };
+  }
+  if (text.length > GLOBAL_AGENTS_CAP_CHARS) throw new Error(`globalAgentsMd is too long (max ${GLOBAL_AGENTS_CAP_CHARS} chars).`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text + "\n");
+  return { ok: true, updated: true };
 }
 
 function defaultFactory(help: string): SessionFactory {
@@ -1142,7 +1205,7 @@ export class WebHub {
       case "/term/input": {
         const t = live().terminals.get(String(d.tid ?? ""));
         if (!t) throw new Error("no such terminal");
-        t.write(String(d.text ?? ""));
+        t.input(String(d.text ?? ""), d.hidden === true);
         return {};
       }
       case "/term/interrupt": {
@@ -1154,6 +1217,20 @@ export class WebHub {
       case "/term/close":
         this.closeTerminal(sid, String(d.tid ?? ""));
         return {};
+      case "/settings/get":
+        return getSettingsStatus(this.dataDir);
+      case "/settings/save": {
+        // Each field is optional; absent fields are left alone. An explicit
+        // empty key still deletes it (the Clear button sends "").
+        const hasKey = d && typeof d === "object" && "braveApiKey" in d;
+        const hasNotes = d && typeof d === "object" && "globalAgentsMd" in d;
+        if (!hasKey && !hasNotes) throw new Error("nothing to save.");
+        return {
+          ok: true,
+          ...(hasKey ? saveSettingsKey(d?.braveApiKey) : {}),
+          ...(hasNotes ? saveSettingsNotes(d?.globalAgentsMd, this.dataDir) : {}),
+        };
+      }
       default:
         throw new Error(`unknown endpoint ${p}`);
     }

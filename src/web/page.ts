@@ -46,7 +46,7 @@ export const PAGE_HTML = `<!doctype html>
     <div id="fshdr"><span id="fslabel">Files</span><span class="grow"></span><span id="fsreload" class="fsbtn" title="reload the tree">⟳</span><span id="fsexpandall" class="fsbtn" title="expand all">▸</span></div>
     <div id="fstree" class="fstree"></div>
   </div>
-  <div class="sidefoot"><span id="ver"></span><span class="grow"></span><button class="iconbtn" id="keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button></div>
+  <div class="sidefoot"><span id="ver"></span><span class="grow"></span><button class="iconbtn" id="settings" title="Settings (API keys)" aria-label="Settings">⚙</button><button class="iconbtn" id="keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button></div>
 </aside>
 <div id="main">
   <div id="top">

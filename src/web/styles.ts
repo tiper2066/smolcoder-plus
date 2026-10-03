@@ -371,6 +371,19 @@ export const STYLES = String.raw`
   #panel { background: #101416; }
   .shortcut-list { line-height: 2; padding: 16px 24px; }
 
+  /* Settings dialog (API keys). Built with the el() helper, so every row is
+     a plain element — no HTML is ever interpolated from user input. */
+  .settings-list { display: flex; flex-direction: column; gap: 10px; padding: 16px 24px; min-width: min(420px, 80vw); }
+  .settings-list .row { display: flex; align-items: center; gap: 8px; }
+  .settings-list label { color: var(--dim); font-size: 12.5px; }
+  .settings-list input[type="password"] { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); color: var(--fg); font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 4px; outline: 0; }
+  .settings-list input[type="password"]:focus { border-color: var(--accent); }
+  .settings-list textarea { width: 100%; box-sizing: border-box; min-height: 110px; resize: vertical; background: var(--bg); border: 1px solid var(--line); color: var(--fg); font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 4px; outline: 0; }
+  .settings-list textarea:focus { border-color: var(--accent); }
+  .settings-list .status { font-size: 12.5px; color: var(--dim); min-height: 1.6em; }
+  .settings-list .status.err { color: var(--red); }
+  .settings-list .status.ok { color: var(--green); }
+
   /* Attachments: chips in the composer; thumbnails and file links in a sent message. */
   #attachrow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
   .attach { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px 4px 8px; background: #141a1d; font-size: 12px; color: var(--fg); }

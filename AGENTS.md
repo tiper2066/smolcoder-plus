@@ -48,14 +48,14 @@ src/
                     channel.ts · store.ts · terminal.ts
 ```
 
-- **에이전트가 쓰는 도구 9개** (`src/tools/index.ts`의 `buildToolSpecs(mode)`): `read_file` `list_files` `search` `web_search` `plan` `write_file` `edit_file` `run_command` `task`. `ro` 모드는 앞의 5개(읽기)만, `edit`/`bypass`는 9개.
+- **에이전트가 쓰는 도구 10개** (`src/tools/index.ts`의 `buildToolSpecs(mode)`): `read_file` `list_files` `search` `web_search` `web_fetch` `plan` `write_file` `edit_file` `run_command` `task`. `ro` 모드는 앞의 6개(읽기)만, `edit`/`bypass`는 10개.
 - `session.ts` ↔ `tui/`(터미널) ↔ `web/`(브라우저)는 **같은 루프를 공유**한다. 로직을 한쪽에만 넣지 말고 양쪽 UI가 함께 쓸 수 있게 `Session`/`SessionUI`(`ui.ts`) 경계에 둔다.
 
 ## 🌐 web_search (Brave Search)
 
-필요할 때 인터넷 검색: agent의 `web_search` 도구 사용 ({"query": "..."}). BRAVE_API_KEY가 루트 .env에 있으면 동작하며, 기존 8개 도구와 함께 ro/edit/bypass 모든 모드에서 등록됨.
+필요할 때 인터넷 검색: agent의 `web_search` 도구 사용 ({"query": "..."}). BRAVE_API_KEY가 루트 .env에 있으면 동작하며, 기존 9개 도구와 함께 ro/edit/bypass 모든 모드에서 등록됨. 검색 결과 페이지 본문은 `web_fetch` 도구로 읽는다 (curl 대신).
 
-> 현재 도구는 `web_search`를 포함해 **9개**다(위 참조).
+> 현재 도구는 `web_search`·`web_fetch`를 포함해 **10개**다(위 참조).
 
 ## 🔒 보안 규칙
 

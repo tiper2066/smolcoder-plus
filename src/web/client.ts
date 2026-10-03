@@ -1410,21 +1410,39 @@ function ensureTermTab(v, tid, cwd) {
   const prompt = el("span", "prompt");
   const inp = document.createElement("input");
   inp.placeholder = "Run a command…"; inp.title = "Enter to run · Ctrl+C to interrupt · Ctrl+L to clear"; inp.setAttribute("aria-label", "Terminal command"); inp.spellcheck = false; inp.autocomplete = "off";
+  // One-shot mask for the next input: while a command runs the line answers
+  // it on stdin (sudo -S and the like), and the server echoes bullets instead
+  // of the text — in the stream, the replay and every connected page.
+  const lock = el("button", "iconbtn", "🔓");
+  lock.title = "mask the next input (for passwords — echoed as ••••••••, never stored in history)";
+  lock.setAttribute("aria-label", "Mask the next terminal input");
+  lock.onclick = () => {
+    t.maskNext = !t.maskNext;
+    lock.textContent = t.maskNext ? "🔒" : "🔓";
+    lock.classList.toggle("on", !!t.maskNext);
+    inp.focus();
+  };
   inp.onkeydown = (e) => {
     if (e.key === "Enter") {
       const text = inp.value;
       if (!text.trim()) return;
       inp.value = "";
-      if (t.history[t.history.length - 1] !== text) t.history.push(text);
-      t.hi = t.history.length;
-      post("/term/input", { sid: v.sid, tid, text });
+      const masked = !!t.maskNext;
+      t.maskNext = false; lock.textContent = "🔓"; lock.classList.remove("on");
+      if (!masked) {
+        if (t.history[t.history.length - 1] !== text) t.history.push(text);
+        t.hi = t.history.length;
+      }
+      t.waiting = true;
+      inp.placeholder = "Command running — type input for it (sudo needs -S)…";
+      post("/term/input", { sid: v.sid, tid, text, hidden: masked });
     } else if (e.key === "c" && e.ctrlKey && !String(window.getSelection())) { e.preventDefault(); post("/term/interrupt", { sid: v.sid, tid }); }
     else if (e.key === "l" && e.ctrlKey) { e.preventDefault(); out.innerHTML = ""; t.cur = null; t.lines = 0; }
     else if (e.key === "ArrowUp") { if (t.hi > 0) { t.hi--; inp.value = t.history[t.hi]; } e.preventDefault(); }
     else if (e.key === "ArrowDown") { if (t.hi < t.history.length - 1) { t.hi++; inp.value = t.history[t.hi]; } else { t.hi = t.history.length; inp.value = ""; } e.preventDefault(); }
   };
   out.onclick = () => { if (!String(window.getSelection())) inp.focus(); };
-  row.appendChild(prompt); row.appendChild(inp);
+  row.appendChild(prompt); row.appendChild(inp); row.appendChild(lock);
   body.appendChild(out); body.appendChild(row);
   v.panelEl.appendChild(body);
   t.el = body; t.out = out; t.inp = inp; t.promptEl = prompt;
@@ -1455,6 +1473,8 @@ function termDone(v, tid, code, cwd) {
   const t = v.terms.get(tid);
   if (!t) return;
   if (cwd) setPrompt(t, cwd);
+  t.waiting = false;
+  if (t.inp) t.inp.placeholder = "Run a command…";
   if (t.cur && t.cur.textContent) termWrite(v, tid, "\n");
   if (code) termWrite(v, tid, "\x1b[2m[exit " + code + "]\x1b[0m\n");
 }
@@ -1612,6 +1632,80 @@ mainEl.addEventListener("dragover", (e) => { if (!active || !hasFiles(e)) return
 mainEl.addEventListener("dragleave", (e) => { if (e.relatedTarget && mainEl.contains(e.relatedTarget)) return; mainEl.classList.remove("dragging"); });
 mainEl.addEventListener("drop", (e) => { mainEl.classList.remove("dragging"); if (!active || !hasFiles(e)) return; e.preventDefault(); addFiles([...e.dataTransfer.files]); });
 
+// ---- settings ---------------------------------------------------------------
+// API keys without touching .env. The full key is never read back: the server
+// only reports whether one is stored (plus a short hint), and an exported env
+// var shadows whatever is stored. The dialog is built with el() only, so user
+// input never passes through innerHTML.
+function settingsStatusText(r) {
+  if (r.envOverride) return "A key is set in the environment — it takes precedence over the stored one.";
+  if (r.braveApiKeySet) return "Stored key: " + (r.braveApiKeyHint || "••••");
+  return "No key stored.";
+}
+function openSettings() {
+  const dialog = document.createElement("dialog"); dialog.className = "dlg";
+  const list = el("div", "settings-list");
+  list.appendChild(el("div", "", "Settings"));
+  list.appendChild(el("div", "hint", "Brave Search API key for web_search (stored in the app config file), and global instructions every session follows (no project AGENTS.md needed for these)."));
+  const row = el("div", "row");
+  const label = document.createElement("label"); label.textContent = "Brave API key"; row.appendChild(label);
+  const field = document.createElement("input");
+  field.type = "password"; field.autocomplete = "off"; field.spellcheck = false;
+  field.placeholder = "paste a key to set it (empty keeps it)";
+  row.appendChild(field);
+  list.appendChild(row);
+  const notesLabel = el("div", "hint", "Global instructions (tone, language — up to 4000 chars):");
+  list.appendChild(notesLabel);
+  const notes = document.createElement("textarea");
+  notes.rows = 5; notes.spellcheck = false;
+  notes.placeholder = "e.g. Answer in Korean. Write code comments in Korean.";
+  list.appendChild(notes);
+  const status = el("div", "status", "loading…");
+  list.appendChild(status);
+  const btnrow = el("div", "row");
+  const save = el("button", "primary", "Save");
+  const clear = el("button", "ghost", "Clear");
+  const close = el("button", "ghost", "Close");
+  btnrow.appendChild(save); btnrow.appendChild(clear); btnrow.appendChild(close);
+  list.appendChild(btnrow);
+  dialog.appendChild(list); document.body.appendChild(dialog);
+  dialog.onclose = () => dialog.remove();
+  const show = (cls, text) => { status.className = "status" + (cls ? " " + cls : ""); status.textContent = text; };
+  const refresh = () => {
+    show("", "loading…");
+    post("/settings/get", {}).then((r) => {
+      if (r.error) { show("err", r.error); return; }
+      if (typeof r.globalAgentsMd === "string") notes.value = r.globalAgentsMd;
+      show("", settingsStatusText(r));
+    });
+  };
+  save.onclick = () => {
+    // An empty key field means "leave it": only Clear deletes the key.
+    const body = { globalAgentsMd: notes.value };
+    if (field.value.trim()) body.braveApiKey = field.value;
+    show("", "saving…");
+    post("/settings/save", body).then((r) => {
+      if (r.error) { show("err", r.error); return; }
+      field.value = "";
+      show("ok", "Saved. New sessions follow the instructions right away.");
+      refresh();
+    });
+  };
+  clear.onclick = () => {
+    show("", "clearing…");
+    post("/settings/save", { braveApiKey: "" }).then((r) => {
+      if (r.error) { show("err", r.error); return; }
+      field.value = "";
+      show("ok", "Cleared.");
+      refresh();
+    });
+  };
+  close.onclick = () => dialog.close();
+  dialog.showModal();
+  refresh();
+}
+$("settings").onclick = () => openSettings();
+
 // ---- global keys ----------------------------------------------------------
 $("keys").onclick = () => {
   const dialog = document.createElement("dialog"); dialog.className = "dlg";
@@ -1622,6 +1716,7 @@ $("keys").onclick = () => {
 };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.activeElement !== input) {
+    if (document.querySelector("dialog[open]")) return;
     if (!$("modal").hidden) closeDialog();
     else if (active && !(document.activeElement && document.activeElement.closest && document.activeElement.closest(".tabbody.term"))) post("/cancel", { sid: active.sid });
   } else if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "b") { e.preventDefault(); setSide(!sideEl.classList.contains("collapsed")); }

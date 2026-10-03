@@ -17,7 +17,7 @@ import { ContextManager } from "./context";
 import { EventBus } from "./events";
 import { terminalLogo } from "./logo";
 import { Plan } from "./plan";
-import { buildSystemPrompt, loadAgentsMd } from "./prompt";
+import { buildSystemPrompt, resolveAgentsMd } from "./prompt";
 import { Effort } from "./providers/types";
 import {
   effortAdvice,
@@ -235,9 +235,12 @@ async function runHeadless(args: CliArgs): Promise<void> {
     commandsRun: [],
   };
   const ctxMgr = new ContextManager(chosen.contextWindow, provider.maxOutputTokens);
-  const agentsMd = loadAgentsMd(args.workspace);
-  if (agentsMd) ui.status(`· AGENTS.md loaded (${agentsMd.split("\n").length} lines)`);
-  const systemPrompt = buildSystemPrompt({ workspace: args.workspace, mode, shellLabel: shell.label, agentsMd });
+  const agentsMd = resolveAgentsMd(args.workspace);
+  if (agentsMd.text) {
+    const sources = [agentsMd.fromGlobal && "global", agentsMd.fromWorkspace && "project"].filter(Boolean).join("+");
+    ui.status(`· AGENTS.md loaded (${agentsMd.text.split("\n").length} lines${sources ? `, ${sources}` : ""})`);
+  }
+  const systemPrompt = buildSystemPrompt({ workspace: args.workspace, mode, shellLabel: shell.label, agentsMd: agentsMd.text });
   const agent = new Agent(provider, mode, systemPrompt, toolCtx, ctxMgr, bus, ui, false, 1000,
     args.verify ? { command: args.verify, maxAttempts: args.verifyAttempts } : undefined);
   reportCompactions(bus, ui);

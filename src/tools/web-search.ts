@@ -6,6 +6,9 @@ const MAX_OUTPUT_CHARS = 3000;
 export const DEFAULT_MAX_RESULTS = 5;
 const FETCH_TIMEOUT_MS = 10000;
 
+/** Shown when no key is found in env, config, or .env. */
+export const MISSING_KEY_MESSAGE = "Error: Missing BRAVE_API_KEY (set it in Settings or .env).";
+
 export interface WebSearchResult {
   title: string;
   snippet: string;
@@ -52,6 +55,23 @@ async function loadDotEnv(): Promise<void> {
   }
 }
 
+/** Resolve the Brave key with priority: real env > config file > .env file.
+ * loadDotEnv only fills keys that are not already set, so checking the env
+ * first keeps an exported value ahead of everything else. */
+export async function resolveBraveKey(): Promise<string | undefined> {
+  const fromEnv = process.env.BRAVE_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const { loadConfig } = await import("../config");
+    const fromConfig = loadConfig().braveApiKey?.trim();
+    if (fromConfig) return fromConfig;
+  } catch {
+    // Config unreadable — fall through to .env.
+  }
+  await loadDotEnv();
+  return process.env.BRAVE_API_KEY?.trim() || undefined;
+}
+
 /** fetch with a hard timeout; returns null on any failure. */
 async function fetchWithTimeout(url: string, options: Record<string, any> = {}): Promise<Response | null> {
   const controller = new AbortController();
@@ -87,12 +107,13 @@ export function formatWebSearchResults(results: WebSearchResult[]): string {
 }
 
 /** Call the Brave Search API and return up to maxResults items. */
-export async function searchBrave(query: string, maxResults: number): Promise<WebSearchResult[]> {
+export async function searchBrave(query: string, maxResults: number, apiKey?: string): Promise<WebSearchResult[]> {
+  const key = apiKey ?? process.env.BRAVE_API_KEY;
   const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`;
   const res = await fetchWithTimeout(url, {
     headers: {
       Accept: "application/json",
-      "X-Subscription-Token": process.env.BRAVE_API_KEY,
+      "X-Subscription-Token": key,
     },
   });
   if (!res) throw new Error("Network request failed.");
@@ -109,13 +130,12 @@ export async function searchBrave(query: string, maxResults: number): Promise<We
 /** Main entry point used by the tool registry. Returns a formatted string. */
 export function webSearch(query: string, maxResults?: number): Promise<string> {
   const limit = Math.max(1, Math.min(8, maxResults ?? DEFAULT_MAX_RESULTS));
-  return loadDotEnv()
-    .then(() => {
-      if (!process.env.BRAVE_API_KEY) {
-        return "Error: Missing BRAVE_API_KEY environment variable.";
-      }
-      return searchBrave(query, limit)
-        .then((results) => truncate(formatWebSearchResults(results), MAX_OUTPUT_CHARS))
-        .catch((e) => `Error: ${e.message}`);
-    });
+  return resolveBraveKey().then((key) => {
+    if (!key) {
+      return MISSING_KEY_MESSAGE;
+    }
+    return searchBrave(query, limit, key)
+      .then((results) => truncate(formatWebSearchResults(results), MAX_OUTPUT_CHARS))
+      .catch((e) => `Error: ${e.message}`);
+  });
 }
