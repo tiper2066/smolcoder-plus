@@ -555,6 +555,19 @@ function handle(m) {
 }
 
 // ---- hub snapshot + sidebar ------------------------------------------------
+// Each workspace box can be folded so its sessions leave the list. The state
+// is keyed by workspace path in localStorage, so it survives a reload and the
+// periodic sidebar re-render.
+const wsCollapsed = {};
+try {
+  const savedWs = JSON.parse(ls.get("smol.ws.collapsed") || "{}");
+  if (savedWs && typeof savedWs === "object") for (const p in savedWs) if (savedWs[p]) wsCollapsed[p] = true;
+} catch (e) {}
+function isWsCollapsed(p) { return !!wsCollapsed[p]; }
+function setWsCollapsed(p, c) {
+  if (c) wsCollapsed[p] = true; else delete wsCollapsed[p];
+  ls.set("smol.ws.collapsed", JSON.stringify(wsCollapsed));
+}
 function onHub(m) {
   hub = m;
   sessInfo.clear();
@@ -616,15 +629,25 @@ function renderSidebar() {
   list.innerHTML = "";
   if (!hub.workspaces.length) return;
   for (const w of hub.workspaces) {
-    const box = el("div", "ws");
+    const collapsed = isWsCollapsed(w.path);
+    const box = el("div", "ws" + (collapsed ? " collapsed" : ""));
     const hdr = el("div", "wshdr"); hdr.title = w.path;
-    hdr.appendChild(el("span", "wsname", w.name)); hdr.appendChild(el("span", "grow"));
+    const toggle = el("button", "iconbtn ws-toggle", collapsed ? "▸" : "▾");
+    toggle.title = (collapsed ? "expand " : "collapse ") + w.sessions.length + " session" + (w.sessions.length === 1 ? "" : "s") + " in " + w.name;
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggle.setAttribute("aria-label", toggle.title);
+    toggle.onclick = (e) => { e.stopPropagation(); setWsCollapsed(w.path, !isWsCollapsed(w.path)); renderSidebar(); };
+    hdr.appendChild(toggle);
+    hdr.appendChild(el("span", "wsname", w.name));
+    if (collapsed && w.sessions.length) hdr.appendChild(el("span", "ws-count", w.sessions.length + ""));
+    hdr.appendChild(el("span", "grow"));
     const plus = el("button", "iconbtn", "+"); plus.title = "new session in " + w.name;
     plus.onclick = (e) => { e.stopPropagation(); newSession(w.path); };
     const rm = el("button", "iconbtn", "×"); rm.title = "remove " + w.name + " from the list";
     rm.onclick = (e) => { e.stopPropagation(); removeWorkspace(w); };
     hdr.appendChild(plus); hdr.appendChild(rm);
     if (!w.sessions.length) { hdr.style.cursor = "pointer"; hdr.onclick = () => newSession(w.path); }
+    else { hdr.style.cursor = "pointer"; hdr.onclick = () => { setWsCollapsed(w.path, !isWsCollapsed(w.path)); renderSidebar(); }; }
     box.appendChild(hdr);
     const sl = el("div", "sessions");
     for (const s of w.sessions) {

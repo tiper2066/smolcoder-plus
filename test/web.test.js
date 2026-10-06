@@ -192,6 +192,27 @@ test("web: the sidebar tab switch matches .side-tab and hides the other panel", 
   assert.match(CLIENT_JS, /\$\("tree-panel"\)\.classList\.toggle\("on"/);
 });
 
+test("web: workspace session lists collapse per workspace", () => {
+  // Each workspace box can be folded so its sessions leave the list. The
+  // state is keyed by workspace path, so one workspace stays open while
+  // another is folded, and it survives the periodic sidebar re-render.
+  assert.match(CLIENT_JS, /smol\.ws\.collapsed/, "the collapsed state is persisted");
+  assert.match(CLIENT_JS, /function isWsCollapsed\(p\)/, "one place reads the state");
+  assert.match(CLIENT_JS, /function setWsCollapsed\(p, c\)/, "one place writes the state");
+  const side = CLIENT_JS.slice(CLIENT_JS.indexOf("function renderSidebar"), CLIENT_JS.indexOf("function removeWorkspace"));
+  assert.match(side, /isWsCollapsed\(w\.path\)/, "collapsed by workspace path, not by session");
+  assert.match(side, /"ws" \+ \(collapsed \? " collapsed" : ""\)/, "the box carries the collapsed class");
+  assert.match(side, /ws-toggle/, "a chevron toggles the workspace");
+  assert.match(side, /setWsCollapsed\(w\.path, !isWsCollapsed\(w\.path\)\)/, "toggling flips only that workspace");
+  assert.match(side, /renderSidebar\(\)/, "the list re-renders after toggling");
+  assert.match(side, /stopPropagation\(\)/, "the toggle does not start a session or remove the workspace");
+  assert.match(side, /aria-expanded/, "the chevron is exposed to assistive tech");
+  const { STYLES } = require("../dist/web/styles");
+  assert.match(STYLES, /\.ws\.collapsed \.sessions \{[^}]*display: none/, "a collapsed workspace hides its sessions");
+  assert.match(STYLES, /\.wshdr \.ws-toggle \{[^}]*visibility: visible/, "the chevron is always visible, unlike the hover-only actions");
+  assert.match(STYLES, /\.wshdr \.ws-toggle \{[^}]*font-size: 16px/, "the chevron is large enough to hit");
+});
+
 test("web: the file tree is fetched over GET and rendered as a nested tree", () => {
   // Regression: the tree was loaded with post(), but the hub only serves
   // GET /fs/tree — the sidebar stayed empty no matter what.

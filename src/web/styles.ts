@@ -57,6 +57,11 @@ export const STYLES = String.raw`
   .wspath { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--gray); }
   .wshdr .iconbtn { visibility: hidden; padding: 0 5px; }
   .wshdr:hover .iconbtn { visibility: visible; }
+  /* The workspace collapse chevron is always visible: it is the affordance
+     for folding the session list, not a hover-only action like + / x. */
+  .wshdr .ws-toggle { visibility: visible; flex: none; font-size: 16px; line-height: 1; padding: 2px 8px; min-width: 28px; justify-content: center; }
+  .ws.collapsed .sessions { display: none; }
+  .ws-count { color: var(--gray); font-size: 11px; flex: none; border: 1px solid var(--line); border-radius: 9px; padding: 0 7px; }
   .sess { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 4px; cursor: pointer; color: var(--dim); font-size: 13px; }
   .sess:hover { background: #141a1d; color: var(--fg); }
   .sess.active { background: #17232a; color: #eef3f5; }
