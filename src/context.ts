@@ -33,6 +33,9 @@ import { IMAGE_TOKENS } from "./attachments";
 
 const MSG_OVERHEAD_TOKENS = 8;
 const EVICT_KEEP_RECENT = 6; // never evict tool results in the last N messages
+// Windows at or above this size compact later: their absolute headroom is
+// generous, so waiting until 90% still leaves room to work.
+const LARGE_WINDOW_TOKENS = 32 * 1024;
 const EVICT_STUB = "[old output removed to save space — run the tool again if you need it]";
 const STALE_READ_STUB = "[this read is out of date — the file was rewritten afterwards. Call read_file again if you need its current content.]";
 const STALE_READ_MIN_CHARS = 1500; // small reads are cheaper to keep than to re-prefill around
@@ -150,6 +153,14 @@ export class ContextManager {
     return Math.max(0, this.window - this.reserve - Math.min(256, Math.floor(this.window * 0.05)));
   }
 
+  /** Soft compaction trigger as a fraction of the usable window. Small
+   * windows thrash when the trigger comes late (every step re-compacts),
+   * so they start at 80%; large windows wait until 90%. Read live so a
+   * mid-session model switch re-targets automatically. */
+  compactRatio(): number {
+    return this.window >= LARGE_WINDOW_TOKENS ? 0.9 : 0.8;
+  }
+
   /** Leave room for several related reads, their calls, and the next edit.
    * This is a character cap, deliberately much smaller than input tokens. */
   toolResultCharLimit(): number {
@@ -212,7 +223,7 @@ export class ContextManager {
   }
 
   needsAttention(messages: Msg[], tools: ToolSpec[]): boolean {
-    if (this.estimatePrompt(messages, tools) <= 0.8 * this.usableWindow()) {
+    if (this.estimatePrompt(messages, tools) <= this.compactRatio() * this.usableWindow()) {
       this.floorWarned = false; // healthy again — re-arm the floor warning
       return false;
     }
@@ -262,7 +273,7 @@ export class ContextManager {
     opts: { force?: boolean; signal?: AbortSignal; deterministic?: boolean } = {}
   ): Promise<{ messages: Msg[]; report: CompactionReport }> {
     const before = this.estimatePrompt(messages, tools);
-    if (!opts.force && before <= 0.8 * this.usableWindow()) {
+    if (!opts.force && before <= this.compactRatio() * this.usableWindow()) {
       return { messages, report: { action: "none", before, after: before } };
     }
 
@@ -272,7 +283,7 @@ export class ContextManager {
       if (JSON.stringify(messages.slice(0, ready.count)) === ready.source) {
         const candidate = [...ready.messages, ...messages.slice(ready.count)];
         const after = Math.ceil((this.estimateMessages(candidate) + this.estimateTools(tools)) * this.calibration);
-        if (after < before && after <= this.usableWindow() * 0.8) {
+        if (after < before && after <= this.usableWindow() * this.compactRatio()) {
           this.resetAnchor();
           return { messages: candidate, report: { action: "compacted", before, after } };
         }
@@ -343,7 +354,7 @@ export class ContextManager {
       }
     }
     let after = this.estimatePrompt(messages, tools);
-    if (!opts.force && after <= 0.8 * this.usableWindow()) {
+    if (!opts.force && after <= this.compactRatio() * this.usableWindow()) {
       return { messages, report: { action: "evicted", before, after } };
     }
 
@@ -365,7 +376,7 @@ export class ContextManager {
       compacted.splice(2, end - 2);
       after = this.estimatePrompt(compacted, tools);
     }
-    if (after > 0.8 * this.usableWindow()) {
+    if (after > this.compactRatio() * this.usableWindow()) {
       // Irreducible floor: the window simply cannot hold what must stay
       // (system prompt + AGENTS.md + tool schemas + the working tail).
       // Stop repeated futile summaries; assertFits still guards every request.

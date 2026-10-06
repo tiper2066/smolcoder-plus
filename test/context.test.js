@@ -6,6 +6,22 @@ const { ContextManager, renderForDigest } = require("../dist/context");
 const { describeStats } = require("../dist/agent");
 const { lastUserIndex } = require("../dist/providers/types");
 
+test("compaction trigger follows the window size: 80% below 32k, 90% at or above", () => {
+  const small = new ContextManager(8192, 2048);
+  const large = new ContextManager(32768, 2048);
+  assert.equal(small.compactRatio(), 0.8);
+  assert.equal(large.compactRatio(), 0.9);
+  assert.equal(new ContextManager(4096, 1024).compactRatio(), 0.8, "small windows keep the early trigger");
+  // 85% of the usable window: a small window already needs attention while a
+  // large one still has absolute room to spare.
+  const at85 = (cm) => {
+    const target = Math.ceil(cm.usableWindow() * 0.85);
+    return [{ role: 'system', content: 's' }, { role: 'user', content: 'x'.repeat(target * 4) }];
+  };
+  assert.equal(small.needsAttention(at85(small), []), true);
+  assert.equal(large.needsAttention(at85(large), []), false);
+});
+
 test("compaction keeps a fresh tool result that fits the hard budget above the soft target", async () => {
   const cm = new ContextManager(4096, 1024);
   const latest = 'critical '.repeat(800);
