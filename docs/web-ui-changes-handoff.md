@@ -651,3 +651,32 @@ SessionUI 계약은 공유인데 UI 만 갈라지면 사용자에게 "웹이 더
 ---
 
 *2026-09-30 기준: 단계 0 · 1-A · 1-B · 1-C · 2-A · 2-B 전부 완료, `npm test` 171/171. §"이 기능을 처음 만졌다면"의 금지 사항, §"이 단계에서 발견한 기존 회귀"(`#paneltabs` 안의 정적 요소 · 문서/코드 불일치), §"File Edit 패널"의 탭 생성 규칙을 먼저 읽을 것.*
+
+---
+
+## 9. 추가 작업 (2026-10-06 — 검증됨, 커밋됨)
+
+### 9.1 사이드바 워크스페이스 접기/펼치기 (`060ce68`)
+
+- 좌측 Sessions 탭의 워크스페이스 박스(`.ws`)마다 `▸/▾` 토글. 접으면 해당 묶음의 세션만 숨김.
+- 상태는 workspace path 키로 `localStorage smol.ws.collapsed`에 저장 — 새로고침·30초 재렌더 후에도 유지.
+- 헤더 클릭도 토글(`+`/`×`는 `stopPropagation`으로 기존 동작 유지). 접힘 시 세션 수 뱃지(`.ws-count`).
+- 쉐브론은 hover 전용(`+`/`×`)과 달리 항상 표시, 16px + `min-width: 28px` 클릭 영역.
+- 코드: `client.ts:561` 상태/`566` 읽기·쓰기 · `client.ts:632-650` 렌더 · `styles.ts:62-64`.
+- 회귀 테스트: `test/web.test.js` "web: workspace session lists collapse per workspace".
+
+### 9.2 압축 트리거의 윈도우 연동 (`c74f269`)
+
+- `ContextManager.compactRatio()` (`src/context.ts:160`): 32k(`32 * 1024`) 이상 0.9, 미만 0.8.
+- 0.8 하드코딩 5곳을 교체: `needsAttention` 진입·`manage()` 진입·백그라운드 후보 채택·eviction 성공·floor 판정.
+- 0.6 두 곳(백그라운드 미리 준비·eviction 중단 목표)은 무료 수단이라 유지.
+- `setWindow()`가 바뀌면 비율도 실시간 추종 — 세션 중 모델 교체 시 자동 재적용.
+- 회귀 테스트: `test/context.test.js` "compaction trigger follows the window size…" (경계 128k로 옮기면 `0.8 !== 0.9` 실패 확인 후 원복).
+- 검증: `npm test` 218/218.
+
+### 9.3 `AGENTS_BASIC.md` 템플릿 (루트, 자동 로드 안 됨)
+
+- 범용 개발 지침 템플릿 (한글 설명·영어 코드, 파일 도구·잘림 대응·인터넷 도구·일반 규칙). 1249자.
+- 하네스는 작업공간 `AGENTS.md`(8000자)와 설정 global instructions(4000자)만 자동 로드하므로(`src/prompt.ts`),
+  쓰려면 내용을 복사해야 함. 파일头에 적용 방법 명시.
+
